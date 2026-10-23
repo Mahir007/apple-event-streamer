@@ -26,15 +26,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: .go-version
-
-      - name: Check toolchain
-        run: test "$(go env GOVERSION)" = "go$(cat .go-version)"
-
-      - name: Install packaging tools
-        run: sudo apt-get update -q && sudo apt-get install -y -q advancecomp xz-utils zip
+      - uses: ./.github/actions/setup
 
       - name: Test
         run: make vet test
