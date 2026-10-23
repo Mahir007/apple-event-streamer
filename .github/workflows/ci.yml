@@ -1,0 +1,49 @@
+name: CI
+
+# Tests and builds every push and pull request. Packages are kept as a
+# workflow artifact; nothing is published (releases come from tags, see
+# release.yml).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # .go-version pins the Go release used for every build. It also sets the
+  # oldest supported macOS: Go 1.26 is the last release that targets
+  # macOS 12 Monterey (Go 1.27 requires 13). Never switch automatically.
+  GOTOOLCHAIN: local
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: .go-version
+
+      - name: Check toolchain
+        run: test "$(go env GOVERSION)" = "go$(cat .go-version)"
+
+      - name: Install packaging tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q advancecomp xz-utils zip
+
+      - name: Test
+        run: make vet test
+
+      - name: Build packages
+        run: make package VERSION="ci-${GITHUB_SHA::7}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: apple-event-streamer-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error

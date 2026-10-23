@@ -1,0 +1,3 @@
+* text=auto eol=lf
+# Captured playlists are kept byte-for-byte (CRLF) as served.
+internal/hls/testdata/** -text
