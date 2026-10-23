@@ -27,12 +27,22 @@ jobs:
           persist-credentials: false
 
       - uses: ./.github/actions/setup
+        id: setup
 
       - name: Test
         run: make vet test
 
       - name: Build packages
         run: make package VERSION="ci-${GITHUB_SHA::7}"
+
+      # Only main saves Go caches; branches, pull requests and tags restore
+      # main's, which keeps the cache storage from filling with duplicates.
+      - name: Save Go caches
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.setup.outputs.go-cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.setup.outputs.go-cache-paths }}
+          key: ${{ steps.setup.outputs.go-cache-key }}
 
       - uses: actions/upload-artifact@v7
         with:
