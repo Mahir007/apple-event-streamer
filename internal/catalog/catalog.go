@@ -3,6 +3,7 @@
 package catalog
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -432,7 +433,10 @@ func (c *Catalog) Build(s *Stream, subs Subs) (*hls.Master, error) {
 		}
 	}
 	if subs.Enabled && len(picked) == 0 {
-		return nil, fmt.Errorf("no subtitles match %v", subs.Langs)
+		if len(subs.Langs) == 0 {
+			return nil, errors.New("this stream has no subtitles")
+		}
+		return nil, fmt.Errorf("no subtitles match %s", strings.Join(subs.Langs, ", "))
 	}
 	if len(picked) == 0 {
 		attrs = attrs.Without("SUBTITLES")

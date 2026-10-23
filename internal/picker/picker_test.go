@@ -52,10 +52,9 @@ func TestFullFlowAndBack(t *testing.T) {
 	}
 	m.Update(key(tea.KeyEnter)) // range
 	m.Update(key(tea.KeyEnter)) // audio: AAC
-	if m.top().kind != stepSubs {
-		t.Fatalf("subtitles should follow audio, got %v", m.top().kind)
+	if m.top().kind != stepResolution {
+		t.Fatalf("without --subs resolution should follow audio, got %v", m.top().kind)
 	}
-	m.Update(key(tea.KeyEnter)) // subs: None
 	m.Update(key(tea.KeyEnter)) // resolution: 2160p
 	_, cmd := m.Update(key(tea.KeyEnter))
 	if cmd == nil || m.result == nil {
@@ -63,6 +62,40 @@ func TestFullFlowAndBack(t *testing.T) {
 	}
 	if s := m.result.Stream; s.Range != catalog.SDRHEVC || s.Height != 2160 || m.result.Subs.Enabled {
 		t.Fatalf("unexpected result %+v", s)
+	}
+}
+
+func TestAskSubs(t *testing.T) {
+	m := newModel(liveCatalog(t), Header{}, Preset{AskSubs: true})
+	if got := len(m.steps()); got != 5 {
+		t.Fatalf("%d steps, want 5 with --subs", got)
+	}
+	m.Update(key(tea.KeyEnter)) // range: SDR
+	m.Update(key(tea.KeyEnter)) // audio: AAC
+	s := m.top()
+	if s.kind != stepSubs {
+		t.Fatalf("subtitles should follow audio, got %v", s.kind)
+	}
+	if s.items[0].label != "All languages" || s.items[1].label == "None" {
+		t.Fatalf("want All languages then languages, got %q, %q", s.items[0].label, s.items[1].label)
+	}
+	m.Update(key(tea.KeyDown))
+	m.Update(key(tea.KeyDown))
+	m.Update(key(tea.KeyDown)) // ar, de, en
+	m.Update(key(tea.KeyEnter))
+	m.Update(key(tea.KeyEnter)) // resolution
+	m.Update(key(tea.KeyEnter)) // bitrate
+	if m.result == nil || len(m.result.Subs.Langs) != 1 || m.result.Subs.Langs[0] != "en" {
+		t.Fatalf("result subs = %+v", m.result)
+	}
+}
+
+func TestNoSubsStepByDefault(t *testing.T) {
+	m := newModel(liveCatalog(t), Header{}, Preset{})
+	for _, k := range m.steps() {
+		if k == stepSubs {
+			t.Fatal("subtitles step shown without --subs")
+		}
 	}
 }
 

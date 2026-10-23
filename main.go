@@ -40,7 +40,7 @@ var version = ""
 
 type options struct {
 	best, noLaunch, keep, verbose, showVersion bool
-	subs, ad, asl, list                        bool
+	subs, allSubs, ad, asl, list               bool
 	url, mpv, mpvnet, subLang                  string
 	rangeName, audioName, maxRes               string
 	timeout                                    time.Duration
@@ -104,8 +104,13 @@ func run(args []string) (int, error) {
 		}
 		preset.MaxHeight = h
 	}
-	if o.subs || o.subLang != "" {
+	switch {
+	case o.subLang != "":
 		preset.Subs = &catalog.Subs{Enabled: true, Langs: splitLangs(o.subLang)}
+	case o.allSubs:
+		preset.Subs = &catalog.Subs{Enabled: true}
+	case o.subs:
+		preset.AskSubs = true
 	}
 
 	interactive := !o.best && !o.list
@@ -139,6 +144,10 @@ func run(args []string) (int, error) {
 			return 1, errors.New("this playlist has no audio-description tracks")
 		}
 		return 1, errors.New("no playable streams found in the playlist")
+	}
+
+	if (preset.AskSubs || preset.Subs != nil) && len(cat.Subtitles(catalog.Filter{})) == 0 {
+		return 1, errors.New("this playlist has no subtitles")
 	}
 
 	if o.list {
@@ -460,6 +469,7 @@ func parseFlags(args []string) (*options, error) {
 	fs.BoolVar(&o.verbose, "v", false, "")
 	fs.BoolVar(&o.showVersion, "version", false, "")
 	fs.BoolVar(&o.subs, "subs", false, "")
+	fs.BoolVar(&o.allSubs, "all-subs", false, "")
 	fs.StringVar(&o.subLang, "sub-lang", "", "")
 	fs.BoolVar(&o.ad, "ad", false, "")
 	fs.BoolVar(&o.asl, "asl", false, "")
@@ -489,6 +499,12 @@ func parseFlags(args []string) (*options, error) {
 		}
 		o.playerArgs = rest
 	}
+	if o.subLang != "" && o.allSubs {
+		return nil, usageError{errors.New("--sub-lang and --all-subs cannot be combined")}
+	}
+	if o.subs && o.best && o.subLang == "" && !o.allSubs {
+		return nil, usageError{errors.New("--subs shows the subtitles menu, which --best skips; use --all-subs or --sub-lang with --best")}
+	}
 	if o.url != "" && o.asl {
 		return nil, usageError{errors.New("--asl cannot be combined with --url")}
 	}
@@ -502,7 +518,8 @@ Usage:
   %[1]s [options] [-- player options]
 
 With no options an interactive picker is shown:
-  video (SDR, SDR [HEVC], HDR10, Dolby Vision) › audio › subtitles › resolution › bitrate
+  video (SDR, SDR [HEVC], HDR10, Dolby Vision) › audio › resolution › bitrate
+  (plus a subtitles step after audio with --subs)
 Use the arrow keys (or j/k), Enter to choose, ←/Esc to go back, q to quit; the
 mouse works too (click to choose, wheel to scroll, right-click to go back).
 
@@ -512,9 +529,11 @@ Selection:
   --range RANGE       sdr | hevc | hdr10 | dv           (skips that menu)
   --audio AUDIO       aac | atmos                       (skips that menu)
   --max-res RES       highest resolution to offer, e.g. 1080, 1440p, 4k
-  --subs              include subtitles (all languages unless --sub-lang)
-  --sub-lang LANGS    subtitle languages, comma-separated, e.g. en or en,fr
-                      (implies --subs; "en" also matches en-GB etc.)
+  --subs              ask which subtitles to include (picker only)
+  --sub-lang LANGS    include these subtitle languages, comma-separated,
+                      e.g. en or en,fr ("en" also matches en-GB etc.)
+  --all-subs          include every subtitle language
+                      (subtitles are left out unless one of these is given)
   --ad                use audio-description tracks instead of regular audio
   --list              print the available streams and exit
 
@@ -541,7 +560,8 @@ Examples:
   %[1]s
   %[1]s --best
   %[1]s --best --range dv --audio atmos
-  %[1]s --best --subs --sub-lang en --ad
+  %[1]s --subs
+  %[1]s --best --sub-lang en --ad
   %[1]s --url https://example.com/master.m3u8 --no-launch
   %[1]s --best -- --fs --volume=70
 `, name, buildVersion())

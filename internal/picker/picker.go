@@ -28,9 +28,12 @@ type Header struct {
 
 // Preset holds answers supplied on the command line; their steps are skipped.
 type Preset struct {
-	Range     *catalog.Range
-	Audio     *catalog.Audio
-	Subs      *catalog.Subs
+	Range *catalog.Range
+	Audio *catalog.Audio
+	Subs  *catalog.Subs
+	// AskSubs shows the subtitles step (--subs). Without it, and without a
+	// Subs answer, no subtitles are included.
+	AskSubs   bool
 	MaxHeight int
 }
 
@@ -123,7 +126,7 @@ func (m *model) skipped(k stepKind) bool {
 	case stepAudio:
 		return m.preset.Audio != nil
 	case stepSubs:
-		return m.preset.Subs != nil
+		return m.preset.Subs != nil || !m.preset.AskSubs
 	}
 	return false
 }
@@ -181,10 +184,7 @@ func (m *model) build(k stepKind) *step {
 			m.subs = &off
 			return nil
 		}
-		s.items = append(s.items,
-			item{label: "None", value: catalog.Subs{}},
-			item{label: "All languages", detail: fmt.Sprintf("%d tracks", len(subs)), value: catalog.Subs{Enabled: true}},
-		)
+		s.items = append(s.items, item{label: "All languages", detail: fmt.Sprintf("%d tracks", len(subs)), value: catalog.Subs{Enabled: true}})
 		for _, md := range subs {
 			s.items = append(s.items, item{label: md.Name(), detail: md.Language(), value: catalog.Subs{Enabled: true, Langs: []string{md.Language()}}})
 		}

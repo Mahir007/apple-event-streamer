@@ -5,7 +5,7 @@ replay — in [mpv](https://mpv.io) or [mpv.net](https://github.com/mpvnet-playe
 at exactly the quality you choose.
 
 It finds the event's master playlist, lets you pick one rendition
-(video › audio › subtitles › resolution › bitrate), writes a single-rendition
+(video › audio › resolution › bitrate), writes a single-rendition
 `.m3u8` to the system temp folder and hands the terminal over to the player.
 The command lasts until you quit the player, then the playlist is deleted.
 
@@ -29,7 +29,7 @@ apple-event-streamer --version
 apple-event-streamer --help
 ```
 
-Selection options combine freely, e.g. `--best --subs --sub-lang en --ad`:
+Selection options combine freely, e.g. `--best --sub-lang en --ad`:
 
 | Option | Meaning |
 | --- | --- |
@@ -37,8 +37,9 @@ Selection options combine freely, e.g. `--best --subs --sub-lang en --ad`:
 | `--range sdr\|hevc\|hdr10\|dv` | Video range: SDR (H.264), SDR [HEVC], HDR10, Dolby Vision. Skips that menu. |
 | `--audio aac\|atmos` | Audio format. Skips that menu. |
 | `--max-res RES` | Highest resolution to offer, e.g. `1080`, `1440p`, `4k`. |
-| `--subs` | Include subtitles (all languages unless `--sub-lang`). Off by default. |
-| `--sub-lang LANGS` | Comma-separated languages, e.g. `en` or `en,fr`; implies `--subs`. `en` also matches `en-GB`, `zh` matches every Chinese track. |
+| `--subs` | Show a subtitles step in the picker (after audio). Not usable with `--best`. |
+| `--sub-lang LANGS` | Include these subtitle languages, e.g. `en` or `en,fr`. `en` also matches `en-GB`, `zh` matches every Chinese track. |
+| `--all-subs` | Include every subtitle language. |
 | `--ad` | Use audio-description tracks *instead of* regular audio. Off by default. |
 | `--asl` | Play the American Sign Language version of the event. |
 | `--list` | Print every available stream and exit. |
@@ -52,8 +53,11 @@ choose, scroll to move, right-click (or the *Back* button) to go back.
 
 All four video ranges are always listed; any the playlist doesn't carry
 (the live stream has no HDR10, for example) is greyed out and skipped by the
-cursor. The subtitles step comes after audio and defaults to *None*; it is
-skipped when `--subs`/`--sub-lang` already answer it.
+cursor.
+
+Subtitles are left out unless you ask for them: `--subs` adds a subtitles
+step after audio (*All languages* or a single language), while `--sub-lang`
+and `--all-subs` choose up front and work with `--best` too.
 
 ## Player
 
