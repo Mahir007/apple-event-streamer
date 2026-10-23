@@ -1,8 +1,19 @@
 name: Set up build
 description: >-
-  Installs the Go version pinned in .go-version with its module and build
-  caches, plus the archive tools used by `make package`, cached as .debs so
-  later runs skip apt-get update.
+  Installs the Go version pinned in .go-version, restores the Go module and
+  build/test caches, and installs the archive tools used by `make package`
+  (cached as .debs so later runs skip apt-get update).
+
+outputs:
+  go-cache-paths:
+    description: Directories to pass to actions/cache/save.
+    value: ${{ steps.go-env.outputs.paths }}
+  go-cache-key:
+    description: Key to save the Go caches under.
+    value: ${{ steps.go-env.outputs.prefix }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+  go-cache-hit:
+    description: '"true" when the exact key was restored (nothing new to save).'
+    value: ${{ steps.go-cache.outputs.cache-hit }}
 
 runs:
   using: composite
@@ -10,15 +21,38 @@ runs:
     - uses: actions/setup-go@v7
       with:
         go-version-file: .go-version
-        # Restores the module download cache and the build/test cache, keyed
-        # on go.sum. Caches saved on the default branch are also used by
-        # other branches, pull requests and tags.
-        cache: true
-        cache-dependency-path: go.sum
+        # Caching is handled below: setup-go's own cache has no fallback
+        # keys, so any go.sum change would mean a cold build.
+        cache: false
 
     - name: Check toolchain
       shell: bash
       run: test "$(go env GOVERSION)" = "go$(cat .go-version)"
+
+    - name: Locate Go caches
+      id: go-env
+      shell: bash
+      run: |
+        echo "prefix=go-${ImageOS:-unknown}-$(uname -m)-$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+        {
+          echo "paths<<EOF"
+          go env GOCACHE GOMODCACHE
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    # Restore the newest cache: same commit, else same go.sum, else any
+    # cache for this Go version. Go only rebuilds what changed and trims
+    # entries unused for a few days by itself. Saving is done by the
+    # workflow after a successful build on main (see ci.yml).
+    - name: Restore Go caches
+      id: go-cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.go-env.outputs.paths }}
+        key: ${{ steps.go-env.outputs.prefix }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+        restore-keys: |
+          ${{ steps.go-env.outputs.prefix }}-${{ hashFiles('go.sum') }}-
+          ${{ steps.go-env.outputs.prefix }}-
 
     - name: Identify runner image
       id: image
