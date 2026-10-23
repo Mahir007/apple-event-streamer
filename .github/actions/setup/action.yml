@@ -10,7 +10,7 @@ outputs:
     value: ${{ steps.go-env.outputs.paths }}
   go-cache-key:
     description: Key to save the Go caches under.
-    value: ${{ steps.go-env.outputs.prefix }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+    value: ${{ steps.go-env.outputs.key }}
   go-cache-hit:
     description: '"true" when the exact key was restored (nothing new to save).'
     value: ${{ steps.go-cache.outputs.cache-hit }}
@@ -33,7 +33,13 @@ runs:
       id: go-env
       shell: bash
       run: |
-        echo "prefix=go-${ImageOS:-unknown}-$(uname -m)-$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+        prefix="go-${ImageOS:-unknown}-$(uname -m)-$(go env GOVERSION)"
+        deps="$prefix-$(sha256sum go.sum | cut -c1-16)"
+        {
+          echo "prefix=$prefix"
+          echo "deps=$deps"
+          echo "key=$deps-$GITHUB_SHA"
+        } >> "$GITHUB_OUTPUT"
         {
           echo "paths<<EOF"
           go env GOCACHE GOMODCACHE
@@ -49,9 +55,9 @@ runs:
       uses: actions/cache/restore@v6
       with:
         path: ${{ steps.go-env.outputs.paths }}
-        key: ${{ steps.go-env.outputs.prefix }}-${{ hashFiles('go.sum') }}-${{ github.sha }}
+        key: ${{ steps.go-env.outputs.key }}
         restore-keys: |
-          ${{ steps.go-env.outputs.prefix }}-${{ hashFiles('go.sum') }}-
+          ${{ steps.go-env.outputs.deps }}-
           ${{ steps.go-env.outputs.prefix }}-
 
     - name: Identify runner image
