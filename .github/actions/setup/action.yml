@@ -1,0 +1,47 @@
+name: Set up build
+description: >-
+  Installs the Go version pinned in .go-version with its module and build
+  caches, plus the archive tools used by `make package`, cached as .debs so
+  later runs skip apt-get update.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      with:
+        go-version-file: .go-version
+        # Restores the module download cache and the build/test cache, keyed
+        # on go.sum. Caches saved on the default branch are also used by
+        # other branches, pull requests and tags.
+        cache: true
+        cache-dependency-path: go.sum
+
+    - name: Check toolchain
+      shell: bash
+      run: test "$(go env GOVERSION)" = "go$(cat .go-version)"
+
+    - name: Identify runner image
+      id: image
+      shell: bash
+      run: echo "id=${ImageOS:-unknown}-$(uname -m)" >> "$GITHUB_OUTPUT"
+
+    # zip and xz ship with the runner image; advzip (zopfli) does not.
+    - name: Restore packaging tools
+      id: debs
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/packaging-debs
+        key: packaging-debs-${{ steps.image.outputs.id }}-advancecomp-v1
+
+    - name: Install packaging tools
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.debs.outputs.cache-hit }}
+      run: |
+        dir=~/.cache/packaging-debs
+        if [ "$CACHE_HIT" != true ]; then
+          sudo apt-get update -q
+          mkdir -p "$dir" && (cd "$dir" && apt-get download advancecomp)
+        fi
+        sudo dpkg -i "$dir"/*.deb >/dev/null
+        command -v zip xz advzip

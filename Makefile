@@ -32,23 +32,29 @@ dist:
 # .zip recompressed with zopfli (advzip -4); each with an <archive>.sha256
 # in sha256sum format ("<hash>  <archive>").
 # Needs xz, zip and advzip (Debian/Ubuntu: xz-utils zip advancecomp).
+# Archives are compressed in parallel; zopfli is single-threaded and slow.
 TAR := tar --owner=0 --group=0 --numeric-owner --sort=name
 
 package: dist
 	@stage=$$(mktemp -d) && trap 'rm -rf "$$stage"' EXIT && \
 	go run ./tools/thirdparty -o "$$stage/THIRD_PARTY_LICENSES" && \
-	for f in dist/$(BINARY)-*; do \
+	pids= && for f in dist/$(BINARY)-*; do \
+		( set -e; \
 		t=$${f#dist/$(BINARY)-}; t=$${t%.exe}; os=$${t%-*}; \
 		name=$(BINARY)_$(VERSION)_$$t; ext=; [ $$os = windows ] && ext=.exe; \
-		mkdir -m 755 "$$stage/$$name" && \
-		install -m 755 $$f "$$stage/$$name/$(BINARY)$$ext" && install -m 644 LICENSE "$$stage/THIRD_PARTY_LICENSES" "$$stage/$$name/" && \
+		mkdir -m 755 "$$stage/$$name"; \
+		install -m 755 $$f "$$stage/$$name/$(BINARY)$$ext"; \
+		install -m 644 LICENSE "$$stage/THIRD_PARTY_LICENSES" "$$stage/$$name/"; \
 		if [ $$os = windows ]; then \
-			(cd "$$stage" && zip -9 -X -q -r $$name.zip $$name && advzip -z -4 -q $$name.zip) && mv "$$stage/$$name.zip" dist/; \
+			(cd "$$stage" && zip -9 -X -q -r $$name.zip $$name && advzip -z -4 -q $$name.zip); \
+			mv "$$stage/$$name.zip" dist/; \
 		else \
 			$(TAR) -C "$$stage" -cf - $$name | xz -9e -T0 > dist/$$name.tar.xz; \
-		fi || exit 1; \
-		rm $$f; echo "  dist/$$name"; \
-	done && cd dist && for a in *.tar.xz *.zip; do sha256sum $$a > $$a.sha256; done
+		fi; \
+		rm $$f; echo "  dist/$$name" ) & pids="$$pids $$!"; \
+	done; \
+	fail=0; for p in $$pids; do wait $$p || fail=1; done; [ $$fail = 0 ] && \
+	cd dist && for a in *.tar.xz *.zip; do sha256sum $$a > $$a.sha256; done
 
 test:
 	go test ./...

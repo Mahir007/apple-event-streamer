@@ -145,6 +145,11 @@ Every push and pull request runs `.github/workflows/ci.yml`, which tests and
 packages every target and attaches the archives to the workflow run as an
 artifact. It never publishes anything.
 
+Both workflows share `.github/actions/setup`, which caches the Go module and
+build/test caches (keyed on `go.sum`) and the packaging tools, so repeat runs
+only recompile what changed. Compression can't be cached since every build
+differs, so the archives are compressed in parallel instead.
+
 Pushing a tag that starts with `v` runs `.github/workflows/release.yml`,
 which uses the pinned Go toolchain to test, build and package every
 target and publishes a GitHub release
