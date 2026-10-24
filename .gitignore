@@ -35,3 +35,4 @@ go.work.sum
 # Build output
 /dist/
 /apple-event-streamer
+/rsrc_windows_*.syso

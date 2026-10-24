@@ -5,10 +5,20 @@ BUILD   := CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)'
 # macOS ships as one universal2 (x86_64 + arm64) binary.
 TARGETS := linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/universal
 
+# Windows executables embed a version resource (tools/winres); Task Manager
+# shows its description as the process name. The .syso exists only while
+# that one build runs, so a stale version is never linked.
+WINRES := go run ./tools/winres -name $(BINARY) -version '$(VERSION)' \
+	-description 'Apple Event Streamer' -company Mahir007 -copyright 'Copyright © 2026 Mahir007'
+
+# $(call gobuild,GOOS,GOARCH,OUTPUT)
+gobuild = if [ $(1) = windows ]; then $(WINRES) -arch $(2) -o rsrc_windows_$(2).syso || exit 1; fi; \
+	GOOS=$(1) GOARCH=$(2) $(BUILD) -o $(3) .; st=$$?; rm -f rsrc_windows_$(2).syso; [ $$st = 0 ]
+
 .PHONY: build dist package test vet clean
 
 build:
-	$(BUILD) -o $(BINARY)$(shell go env GOEXE) .
+	@$(call gobuild,$$(go env GOOS),$$(go env GOARCH),$(BINARY)$$(go env GOEXE))
 
 dist:
 	@rm -rf dist && mkdir -p dist/.thin
@@ -21,7 +31,7 @@ dist:
 			GOOS=darwin GOARCH=arm64 $(BUILD) -o dist/.thin/darwin-arm64 . && \
 			go run ./tools/macuniversal -o $$out dist/.thin/darwin-amd64 dist/.thin/darwin-arm64 || exit 1; \
 		else \
-			GOOS=$$os GOARCH=$$arch $(BUILD) -o $$out . || exit 1; \
+			$(call gobuild,$$os,$$arch,$$out) || exit 1; \
 		fi; \
 	done
 	@rm -rf dist/.thin
@@ -65,4 +75,4 @@ vet:
 	done
 
 clean:
-	rm -rf dist $(BINARY) $(BINARY).exe
+	rm -rf dist $(BINARY) $(BINARY).exe rsrc_windows_*.syso

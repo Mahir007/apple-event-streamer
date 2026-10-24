@@ -142,6 +142,8 @@ The universal2 binary is assembled by `tools/macuniversal`, a small Go
 equivalent of `lipo -create`, so it can be built on any OS.
 `tools/thirdparty` generates `THIRD_PARTY_LICENSES` from the modules
 `go list -deps` reports for every target, so it always matches what is linked.
+`tools/winres` writes the Windows version resource (the description Task
+Manager shows, plus version and copyright) as a `.syso` the linker embeds.
 
 ## CI and releases
 
