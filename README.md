@@ -103,8 +103,9 @@ The player runs in the same terminal, and the app exits when it does.
 
 ### Playlists
 
-The playlist is deleted when the player closes. Leftovers from a killed run
-are cleaned up after a day.
+The playlist is deleted when the player closes. Playlists left behind by a
+killed run, or written by `--no-launch` without `--keep-playlist`, are
+deleted the next time the app makes a playlist, once they're a day old.
 
 `--keep-playlist` keeps it in your Downloads folder, or in the folder you give
 (created if missing).
