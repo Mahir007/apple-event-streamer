@@ -1,0 +1,24 @@
+TODO
+
+Capture a live Apple Events page for the discovery tests
+---------------------------------------------------------
+The tests only have the replay ("vod") copy of the page, saved in October
+2026. A live copy can only be saved while an event is streaming, so do this
+during the next Apple Event:
+
+1. From the repo root, while the event is live:
+
+     UA='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15'
+     td=internal/discover/testdata
+     curl -sSfL -A "$UA" https://www.apple.com/apple-events/ -o $td/live-page.html
+     json=$(grep -oiE '<meta[^>]+url-json[^>]*>' $td/live-page.html | grep -oE 'content="[^"]+"' | cut -d'"' -f2)
+     curl -sSfL -A "$UA" "$json" -o $td/live-url.json
+
+   (The User-Agent is discover.UserAgent in internal/discover/discover.go.)
+
+2. Check live-url.json has "state": "live" and a videoSrc.hls URL.
+
+3. Add the live pair to TestFindRealPage in internal/discover/find_test.go
+   (the replay pair is loaded by realPage() there), then run make test.
+
+4. Remove the TODO comment above realPage() and this section.
