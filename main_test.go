@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Mahir007/apple-event-streamer/internal/hls"
 )
 
 func TestKeepPlaylistFlag(t *testing.T) {
@@ -93,5 +100,89 @@ func TestKeepFolderPermission(t *testing.T) {
 	_, err := keepFolder(filepath.Join(locked, "x"))
 	if err == nil || !strings.Contains(err.Error(), "couldn't create "+filepath.Join(locked, "x")+": permission denied") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestRun goes through run without a player: reading a local playlist,
+// choosing with presets, sweeping old playlists and writing the new one.
+func TestRun(t *testing.T) {
+	tmp := t.TempDir()
+	for _, env := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(env, tmp)
+	}
+	touch := func(name string, age time.Duration) string {
+		p := filepath.Join(tmp, name)
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		mtime := time.Now().Add(-age)
+		os.Chtimes(p, mtime, mtime)
+		return p
+	}
+	stale := touch("apple-event-0123456789abcdef.m3u8", 48*time.Hour)
+	fresh := touch("apple-event-fedcba9876543210.m3u8", 0)
+	other := touch("apple-event-notours.m3u8", 48*time.Hour)
+	ref := touch("ref", 0) // made the way playlists are, to compare modes
+
+	code, err := run([]string{"--url", "internal/hls/testdata/vod.m3u8", "--best",
+		"--range", "dv", "--audio", "atmos", "--sub-lang", "en", "--no-launch"})
+	if err != nil || code != 0 {
+		t.Fatalf("run = %d, %v", code, err)
+	}
+
+	if _, err := os.Stat(stale); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("stale playlist not swept: %v", err)
+	}
+	for _, p := range []string{fresh, other} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was swept: %v", p, err)
+		}
+	}
+
+	all, _ := filepath.Glob(filepath.Join(tmp, "apple-event-*.m3u8"))
+	written := slices.DeleteFunc(all, func(p string) bool { return p == fresh || p == other })
+	if len(written) != 1 {
+		t.Fatalf("want one new playlist, got %q", written)
+	}
+	st, _ := os.Stat(written[0])
+	refSt, _ := os.Stat(ref)
+	if st.Mode() != refSt.Mode() {
+		t.Errorf("playlist mode %v, want %v", st.Mode(), refSt.Mode())
+	}
+
+	b, err := os.ReadFile(written[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := hls.Parse(bytes.NewReader(b), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Variants) != 1 || !slices.ContainsFunc(m.Variants[0].Codecs(), func(c string) bool { return strings.HasPrefix(c, "dvh") }) {
+		t.Errorf("want one Dolby Vision variant, got %d: %v", len(m.Variants), m.Variants[0].Codecs())
+	}
+	var subs []string
+	for _, md := range m.Media {
+		if md.Type() == "SUBTITLES" {
+			subs = append(subs, md.Language())
+		}
+	}
+	if !slices.Equal(subs, []string{"en"}) {
+		t.Errorf("subtitles %q, want [en]", subs)
+	}
+	if !strings.Contains(string(b), "## Selection: Dolby Vision · Dolby Atmos") {
+		t.Errorf("no selection comment in\n%s", b)
+	}
+
+	abs, _ := filepath.Abs("internal/hls/testdata/vod.m3u8")
+	fileURL := (&url.URL{Scheme: "file", Path: "/" + strings.TrimPrefix(filepath.ToSlash(abs), "/")}).String()
+	if code, err := run([]string{"--url", fileURL, "--list"}); err != nil || code != 0 {
+		t.Errorf("--list with %s = %d, %v", fileURL, code, err)
+	}
+	if _, err := run([]string{"--url", "missing.m3u8", "--best", "--no-launch"}); err == nil ||
+		!strings.Contains(err.Error(), "neither an http(s) URL nor an existing file") {
+		t.Errorf("missing file: %v", err)
 	}
 }

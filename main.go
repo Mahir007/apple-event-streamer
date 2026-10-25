@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -32,7 +33,6 @@ import (
 	"github.com/Mahir007/apple-event-streamer/internal/picker"
 	"github.com/Mahir007/apple-event-streamer/internal/player"
 	"github.com/Mahir007/apple-event-streamer/internal/sanitize"
-	"github.com/Mahir007/apple-event-streamer/internal/shortid"
 	"github.com/Mahir007/apple-event-streamer/internal/userdirs"
 )
 
@@ -437,13 +437,13 @@ func pickBest(c *catalog.Catalog, p picker.Preset) (*catalog.Stream, error) {
 	return nil, fmt.Errorf("no %s + %s stream%s in this playlist; run with --list to see what is available", r, a, limit)
 }
 
-// Temporary playlists are named playlistPrefix + a shortid + ".m3u8".
+// Temporary playlists are named playlistPrefix + 16 hex digits + ".m3u8".
 const playlistPrefix = "apple-event-"
 
 // writePlaylist writes m to a new, uniquely named file in dir.
 func writePlaylist(m *hls.Master, dir, src, summary string) (string, error) {
 	for attempt := 0; ; attempt++ {
-		path := filepath.Join(dir, playlistPrefix+shortid.New()+".m3u8")
+		path := filepath.Join(dir, fmt.Sprintf("%s%016x.m3u8", playlistPrefix, rand.Uint64()))
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if errors.Is(err, os.ErrExist) && attempt < 3 {
 			continue
@@ -480,7 +480,7 @@ func sweepPlaylists(logf func(string, ...any)) {
 	for _, e := range entries {
 		id, ok := strings.CutPrefix(e.Name(), playlistPrefix)
 		id, ok2 := strings.CutSuffix(id, ".m3u8")
-		if !ok || !ok2 || !shortid.Valid(id) || !e.Type().IsRegular() {
+		if !ok || !ok2 || len(id) != 16 || strings.Trim(id, "0123456789abcdef") != "" || !e.Type().IsRegular() {
 			continue
 		}
 		if info, err := e.Info(); err != nil || time.Since(info.ModTime()) < 24*time.Hour {

@@ -214,13 +214,11 @@ func (m *model) build(k stepKind) *step {
 	switch k {
 	case stepRange:
 		for _, r := range m.cat.AvailableRanges() {
-			r := r
 			f.Range = &r
 			s.items = append(s.items, item{label: r.String(), detail: r.Detail(), disabled: !m.available(f), value: r})
 		}
 	case stepAudio:
 		for _, a := range m.cat.Audios() {
-			a := a
 			f.Audio = &a
 			label := a.String()
 			if m.cat.AD {
@@ -248,7 +246,6 @@ func (m *model) build(k stepKind) *step {
 		}
 	case stepResolution:
 		for _, h := range m.cat.Heights(f) {
-			h := h
 			f.Height = &h
 			detail := ""
 			if st := m.cat.Select(f); len(st) > 0 {
