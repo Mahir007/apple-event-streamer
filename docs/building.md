@@ -87,3 +87,15 @@ publishes a GitHub release with the archives and `.sha256` files. Tags with a
 git tag v1.0.0
 git push origin v1.0.0
 ```
+
+`.github/release-notes.sh` writes the release notes: a download table and the
+commit subjects since the previous release. A stable release lists everything
+since the previous stable release, including its release candidates. Commits
+that only change `.github/` or `.gitignore` are left out. If the tag message
+says more than the tag name, it goes at the top:
+
+```sh
+git tag -s v1.1.0 -m "v1.1.0" -m "Adds --foo. Linux builds now need glibc 2.31."
+```
+
+Run the script with a tag to preview the notes.
