@@ -125,6 +125,8 @@ make build     # current platform
 make dist      # all targets into dist/ (macOS as a universal2 binary)
 make package   # dist + archives and .sha256 files (needs xz, zip, advzip)
 make test
+make race      # tests under the race detector (needs cgo)
+make lint      # staticcheck and govulncheck for Linux, Windows and macOS
 ```
 
 Binaries are built with `CGO_ENABLED=0 -trimpath -ldflags "-s -w"`: static,
@@ -147,8 +149,8 @@ Manager shows, plus version and copyright) as a `.syso` the linker embeds.
 
 ## CI and releases
 
-Every push and pull request runs `.github/workflows/ci.yml`, which tests and
-packages every target and attaches the archives to the workflow run as an
+Every push and pull request runs `.github/workflows/ci.yml`, which vets,
+tests (also under the race detector), lints and packages every target and attaches the archives to the workflow run as an
 artifact. It never publishes anything.
 
 Both workflows share `.github/actions/setup`, which restores the newest Go
