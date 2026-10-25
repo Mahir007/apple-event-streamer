@@ -10,8 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"strings"
+	"unicode"
 )
 
 // Attr is a single attribute from an HLS attribute list.
@@ -34,7 +36,7 @@ func ParseAttrs(s string) AttrList {
 			break
 		}
 		key := strings.TrimSpace(s[:eq])
-		s = s[eq+1:]
+		s = strings.TrimLeftFunc(s[eq+1:], unicode.IsSpace)
 
 		var a Attr
 		a.Key = key
@@ -163,9 +165,13 @@ func (v *Variant) SupplementalCodecs() []string {
 	return splitList(v.Attrs.Get("SUPPLEMENTAL-CODECS"))
 }
 
-// Resolution returns the RESOLUTION attribute as width and height.
+// Resolution returns the RESOLUTION attribute as width and height, or
+// zeros when it is missing or invalid.
 func (v *Variant) Resolution() (w, h int) {
 	fmt.Sscanf(v.Attrs.Get("RESOLUTION"), "%dx%d", &w, &h)
+	if w <= 0 || h <= 0 {
+		return 0, 0
+	}
 	return w, h
 }
 
@@ -175,18 +181,6 @@ type Master struct {
 	IndependentSegments bool
 	Media               []*Media
 	Variants            []*Variant
-}
-
-// MediaGroup returns the renditions of the given type and group ID, in
-// playlist order.
-func (m *Master) MediaGroup(typ, group string) []*Media {
-	var out []*Media
-	for _, md := range m.Media {
-		if md.Type() == typ && md.GroupID() == group {
-			out = append(out, md)
-		}
-	}
-	return out
 }
 
 // ErrNotMaster is returned when the input is not a multivariant playlist.
@@ -219,8 +213,11 @@ func Parse(r io.Reader, base *url.URL) (*Master, error) {
 			m.IndependentSegments = true
 		case strings.HasPrefix(line, "#EXT-X-MEDIA:"):
 			attrs := ParseAttrs(strings.TrimPrefix(line, "#EXT-X-MEDIA:"))
-			if u := attrs.Get("URI"); u != "" {
-				attrs = attrs.With("URI", resolve(base, u), true)
+			for i := range attrs {
+				if attrs[i].Key == "URI" {
+					attrs[i].Value = resolve(base, attrs[i].Value)
+					break
+				}
 			}
 			m.Media = append(m.Media, &Media{Attrs: attrs})
 		case strings.HasPrefix(line, "#EXT-X-STREAM-INF:"):
@@ -237,7 +234,9 @@ func Parse(r io.Reader, base *url.URL) (*Master, error) {
 			}
 		}
 	}
-	if err := sc.Err(); err != nil {
+	if err := sc.Err(); errors.Is(err, bufio.ErrTooLong) {
+		return nil, fmt.Errorf("%w: a line is longer than 4 MiB", ErrNotMaster)
+	} else if err != nil {
 		return nil, err
 	}
 	if !started {
@@ -249,8 +248,11 @@ func Parse(r io.Reader, base *url.URL) (*Master, error) {
 	return m, nil
 }
 
+var lineBreaks = strings.NewReplacer("\r", " ", "\n", " ")
+
 // Encode writes m as a multivariant playlist. header lines are written as
-// "## " comments after the session tags.
+// "## " comments after the session tags; line breaks in them become spaces
+// so they can't start uncommented lines.
 func (m *Master) Encode(w io.Writer, header ...string) error {
 	bw := bufio.NewWriter(w)
 	bw.WriteString("#EXTM3U\n")
@@ -261,7 +263,7 @@ func (m *Master) Encode(w io.Writer, header ...string) error {
 		bw.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
 	}
 	for _, h := range header {
-		fmt.Fprintf(bw, "## %s\n", h)
+		fmt.Fprintf(bw, "## %s\n", lineBreaks.Replace(h))
 	}
 	if len(m.Media) > 0 {
 		bw.WriteByte('\n')
@@ -297,13 +299,19 @@ func splitList(s string) []string {
 	return parts
 }
 
+// atoi parses the leading digits of s; it returns 0 for values too large
+// for an int64 rather than wrapping around.
 func atoi(s string) int64 {
 	var n int64
 	for _, c := range s {
 		if c < '0' || c > '9' {
 			break
 		}
-		n = n*10 + int64(c-'0')
+		d := int64(c - '0')
+		if n > (math.MaxInt64-d)/10 {
+			return 0
+		}
+		n = n*10 + d
 	}
 	return n
 }

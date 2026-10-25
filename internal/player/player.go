@@ -167,6 +167,7 @@ func (p *Player) Args(playlist string, o Options) []string {
 // Ctrl+C itself); if it has not exited a few seconds after one, it is
 // killed, which covers GUI players such as mpv.net.
 func (p *Player) Run(args []string, cleanup func()) (int, error) {
+	defer cleanup()
 	cmd := exec.Command(p.Path, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
@@ -175,7 +176,6 @@ func (p *Player) Run(args []string, cleanup func()) (int, error) {
 	defer signal.Stop(sigs)
 
 	if err := cmd.Start(); err != nil {
-		cleanup()
 		return 1, fmt.Errorf("starting %s: %w", p.Kind, err)
 	}
 
@@ -197,7 +197,6 @@ wait:
 			cmd.Process.Kill()
 		}
 	}
-	cleanup()
 
 	var exitErr *exec.ExitError
 	switch {

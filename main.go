@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +31,7 @@ import (
 	"github.com/Mahir007/apple-event-streamer/internal/hls"
 	"github.com/Mahir007/apple-event-streamer/internal/picker"
 	"github.com/Mahir007/apple-event-streamer/internal/player"
+	"github.com/Mahir007/apple-event-streamer/internal/sanitize"
 	"github.com/Mahir007/apple-event-streamer/internal/shortid"
 )
 
@@ -51,9 +53,18 @@ type options struct {
 type usageError struct{ error }
 
 func main() {
+	// Deferred cleanups (the playlist) have run by now; say what crashed and
+	// where to report it, then let the panic print its stack and exit 2.
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "\n%s %s (%s/%s) crashed. Please report this, with the output below, at\nhttps://github.com/Mahir007/apple-event-streamer/issues\n\n",
+				name, buildVersion(), runtime.GOOS, runtime.GOARCH)
+			panic(r)
+		}
+	}()
 	code, err := run(os.Args[1:])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+		fmt.Fprintf(os.Stderr, "%s: %s\n", name, sanitize.Text(err.Error()))
 		var ue usageError
 		if errors.As(err, &ue) {
 			fmt.Fprintf(os.Stderr, "Run '%s --help' for usage.\n", name)
@@ -78,7 +89,7 @@ func run(args []string) (int, error) {
 
 	logf := func(format string, a ...any) {
 		if o.verbose {
-			fmt.Fprintf(os.Stderr, "· "+format+"\n", a...)
+			fmt.Fprintf(os.Stderr, "· %s\n", sanitize.Text(fmt.Sprintf(format, a...)))
 		}
 	}
 
@@ -129,9 +140,10 @@ func run(args []string) (int, error) {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	src, master, err := load(ctx, o, logf)
+	interrupted := ctx.Err() != nil // stop cancels ctx, so check first
 	stop()
 	if err != nil {
-		if ctx.Err() != nil {
+		if interrupted {
 			return 130, nil
 		}
 		return 1, err
@@ -146,8 +158,14 @@ func run(args []string) (int, error) {
 		return 1, errors.New("no playable streams found in the playlist")
 	}
 
-	if (preset.AskSubs || preset.Subs != nil) && len(cat.Subtitles(catalog.Filter{})) == 0 {
-		return 1, errors.New("this playlist has no subtitles")
+	if preset.AskSubs || preset.Subs != nil {
+		available := cat.Subtitles(catalog.Filter{})
+		if len(available) == 0 {
+			return 1, errors.New("this playlist has no subtitles")
+		}
+		if err := checkSubLangs(preset.Subs, available); err != nil {
+			return 1, err
+		}
 	}
 
 	if o.list {
@@ -186,6 +204,7 @@ func run(args []string) (int, error) {
 	if subs.Enabled {
 		summary += " · " + subs.String()
 	}
+	summary = sanitize.Text(summary)
 	fmt.Fprintf(os.Stderr, "▶ %s\n", summary)
 	logf("source: %s", src.url)
 	logf("variant: %s", stream.Variant.URI)
@@ -244,15 +263,20 @@ func load(ctx context.Context, o *options, logf func(string, ...any)) (*source, 
 
 	var body []byte
 	var base *url.URL
-	if isLocal(src.url) {
-		p := strings.TrimPrefix(src.url, "file://")
-		b, err := os.ReadFile(p)
-		if err != nil {
+	p, local, err := localPath(o.url)
+	if err != nil {
+		return nil, nil, err
+	}
+	if local {
+		if body, err = readLocal(p); err != nil {
 			return nil, nil, err
 		}
-		body = b
 		if abs, err := filepath.Abs(p); err == nil {
-			base = &url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+			abs = filepath.ToSlash(abs)
+			if !strings.HasPrefix(abs, "/") {
+				abs = "/" + abs // C:/x becomes file:///C:/x
+			}
+			base = &url.URL{Scheme: "file", Path: abs}
 		}
 	} else {
 		u, err := url.Parse(src.url)
@@ -282,15 +306,74 @@ func load(ctx context.Context, o *options, logf func(string, ...any)) (*source, 
 	return src, m, nil
 }
 
-func isLocal(s string) bool {
-	if strings.HasPrefix(s, "file://") {
-		return true
+// localPath returns the file a --url value names: a file:// URL or an
+// existing path. local is false for anything else, including no --url.
+func localPath(s string) (path string, local bool, err error) {
+	if s == "" {
+		return "", false, nil
+	}
+	if strings.HasPrefix(strings.ToLower(s), "file:") {
+		u, err := url.Parse(s)
+		if err != nil {
+			return "", true, usageError{fmt.Errorf("--url: %w", err)}
+		}
+		path = u.Path
+		remote := u.Host != "" && u.Host != "localhost"
+		switch {
+		case path == "":
+			return "", true, usageError{fmt.Errorf("--url %q: want file:///absolute/path", s)}
+		case runtime.GOOS == "windows" && remote:
+			path = "//" + u.Host + path // UNC share
+		case runtime.GOOS == "windows" && len(path) >= 3 && path[0] == '/' && path[2] == ':':
+			path = path[1:] // /C:/x
+		case remote:
+			return "", true, usageError{fmt.Errorf("--url %q: file URLs on other hosts are not supported", s)}
+		}
+		return filepath.FromSlash(path), true, nil
 	}
 	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
-		return false
+		return "", false, nil
 	}
-	_, err := os.Stat(s)
-	return err == nil
+	_, err = os.Stat(s)
+	return s, err == nil, nil
+}
+
+// readLocal reads a playlist file, refusing anything but a regular file:
+// a FIFO would block forever and a device like /dev/zero never ends.
+func readLocal(path string) ([]byte, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := discover.ReadLimited(f)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return b, nil
+}
+
+// checkSubLangs fails early when --sub-lang names no available track, so
+// the picker isn't shown for a selection that can't be built.
+func checkSubLangs(subs *catalog.Subs, available []*hls.Media) error {
+	if subs == nil || len(subs.Langs) == 0 {
+		return nil
+	}
+	var langs []string
+	for _, md := range available {
+		if subs.Matches(md) {
+			return nil
+		}
+		langs = append(langs, md.Language())
+	}
+	return fmt.Errorf("no subtitles match %s (available: %s)", strings.Join(subs.Langs, ", "), strings.Join(langs, ", "))
 }
 
 // pickBest returns the highest-bandwidth stream. Unset range and audio
@@ -363,7 +446,7 @@ func printList(w io.Writer, c *catalog.Catalog) {
 			audio += " (AD)"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%dx%d\t%s\t%s\t%s\n", s.Range, audio, s.Width, s.Height,
-			catalog.Mbps(s.Bandwidth()), catalog.Mbps(s.AverageBandwidth()), s.VideoCodec)
+			catalog.Mbps(s.Bandwidth()), catalog.Mbps(s.AverageBandwidth()), sanitize.Text(s.VideoCodec))
 	}
 	tw.Flush()
 
@@ -377,7 +460,7 @@ func printList(w io.Writer, c *catalog.Catalog) {
 		for _, s := range subs {
 			langs = append(langs, s.Language())
 		}
-		fmt.Fprintf(w, "\nSubtitles (--sub-lang): %s", strings.Join(langs, ", "))
+		fmt.Fprintf(w, "\nSubtitles (--sub-lang): %s", sanitize.Text(strings.Join(langs, ", ")))
 	}
 	fmt.Fprintln(w)
 }
@@ -401,11 +484,7 @@ func parseHeight(s string) (int, error) {
 }
 
 func splitLangs(s string) []string {
-	var out []string
-	for _, l := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' }) {
-		out = append(out, l)
-	}
-	return out
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' })
 }
 
 func quoteArgs(args []string) []string {
@@ -441,6 +520,12 @@ func (f secondsFlag) String() string {
 
 func (f secondsFlag) Set(s string) error {
 	if sec, err := strconv.ParseFloat(s, 64); err == nil {
+		switch {
+		case math.IsNaN(sec) || sec <= 0:
+			return errors.New("must be positive")
+		case sec > math.MaxInt64/float64(time.Second):
+			return errors.New("too large")
+		}
 		*f.d = time.Duration(sec * float64(time.Second))
 	} else if d, err := time.ParseDuration(s); err == nil {
 		*f.d = d
@@ -498,6 +583,9 @@ func parseFlags(args []string) (*options, error) {
 			return nil, usageError{fmt.Errorf("unexpected argument %q (pass player options after --)", rest[0])}
 		}
 		o.playerArgs = rest
+	}
+	if o.subLang != "" && len(splitLangs(o.subLang)) == 0 {
+		return nil, usageError{fmt.Errorf("--sub-lang %q names no language", o.subLang)}
 	}
 	if o.subLang != "" && o.allSubs {
 		return nil, usageError{errors.New("--sub-lang and --all-subs cannot be combined")}
