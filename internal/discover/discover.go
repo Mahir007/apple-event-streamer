@@ -14,6 +14,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -25,7 +26,9 @@ const EventsPage = "https://www.apple.com/apple-events/"
 // browsers and tools, but some CDNs are picky about empty agents.
 const UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
 
-const maxBody = 16 << 20
+// MaxBody is the most Fetch and ReadLimited accept. Apple's pages and
+// playlists are well under 1 MiB.
+const MaxBody = 16 << 20
 
 // Event describes the stream advertised by the events page.
 type Event struct {
@@ -56,9 +59,12 @@ func Find(ctx context.Context, client *http.Client, asl bool) (*Event, error) {
 		return nil, err
 	}
 	meta := metaContents(string(page))
-	jsonURL := meta["url-json"]
-	if jsonURL == "" {
+	if meta["url-json"] == "" {
 		return nil, errors.New("could not find the event stream on " + EventsPage + " (no url-json meta tag); pass --url instead")
+	}
+	jsonURL, err := resolveHTTP(EventsPage, meta["url-json"])
+	if err != nil {
+		return nil, fmt.Errorf("%s: url-json: %w", EventsPage, err)
 	}
 
 	body, err := Fetch(ctx, client, jsonURL)
@@ -85,7 +91,28 @@ func Find(ctx context.Context, client *http.Client, asl bool) (*Event, error) {
 		}
 		return nil, fmt.Errorf("the events page has no %s right now (state: %s); try again closer to the event or pass --url", kind, state)
 	}
+	if ev.URL, err = resolveHTTP(jsonURL, ev.URL); err != nil {
+		return nil, fmt.Errorf("%s: stream URL: %w", jsonURL, err)
+	}
 	return ev, nil
+}
+
+// resolveHTTP resolves ref against base and requires an http(s) result, so
+// a page can't point the app at a local file or another scheme.
+func resolveHTTP(base, ref string) (string, error) {
+	b, err := url.Parse(base)
+	if err != nil {
+		return "", err
+	}
+	u, err := url.Parse(ref)
+	if err != nil {
+		return "", err
+	}
+	u = b.ResolveReference(u)
+	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+		return "", fmt.Errorf("%q is not an http(s) URL", ref)
+	}
+	return u.String(), nil
 }
 
 // metaContents maps meta tag names/properties (lower-cased) to content.
@@ -124,9 +151,19 @@ func Fetch(ctx context.Context, client *http.Client, url string) ([]byte, error)
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	body, err := ReadLimited(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", url, err)
 	}
 	return body, nil
+}
+
+// ReadLimited reads r to the end, failing if it holds more than MaxBody
+// bytes rather than silently using a truncated prefix.
+func ReadLimited(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, MaxBody+1))
+	if err == nil && len(b) > MaxBody {
+		return nil, fmt.Errorf("larger than %d MiB", MaxBody>>20)
+	}
+	return b, err
 }

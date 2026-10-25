@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Mahir007/apple-event-streamer/internal/catalog"
+	"github.com/Mahir007/apple-event-streamer/internal/sanitize"
 )
 
 // ErrCancelled is returned when the user quits without choosing.
@@ -107,6 +108,7 @@ type model struct {
 }
 
 func newModel(c *catalog.Catalog, h Header, p Preset) *model {
+	h.Description = sanitize.Text(h.Description)
 	m := &model{cat: c, header: h, preset: p, rng: p.Range, audio: p.Audio, subs: p.Subs}
 	m.advance(-1)
 	return m
@@ -186,7 +188,14 @@ func (m *model) build(k stepKind) *step {
 		}
 		s.items = append(s.items, item{label: "All languages", detail: fmt.Sprintf("%d tracks", len(subs)), value: catalog.Subs{Enabled: true}})
 		for _, md := range subs {
-			s.items = append(s.items, item{label: md.Name(), detail: md.Language(), value: catalog.Subs{Enabled: true, Langs: []string{md.Language()}}})
+			label, lang := md.Name(), md.Language()
+			if label == "" {
+				label = "Unnamed track"
+			}
+			if lang == "" {
+				lang = md.Name() // Subs.Matches also matches by name
+			}
+			s.items = append(s.items, item{label: label, detail: md.Language(), value: catalog.Subs{Enabled: true, Langs: []string{lang}}})
 		}
 	case stepResolution:
 		for _, h := range m.cat.Heights(f) {
@@ -206,6 +215,10 @@ func (m *model) build(k stepKind) *step {
 			}
 			s.items = append(s.items, item{label: catalog.Mbps(st.Bandwidth()), detail: detail, value: st})
 		}
+	}
+	for i := range s.items {
+		s.items[i].label = sanitize.Text(s.items[i].label)
+		s.items[i].detail = sanitize.Text(s.items[i].detail)
 	}
 	s.cursor = -1
 	s.move(1)
@@ -322,9 +335,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "end", "G", "shift+g":
 			s.jump(len(s.items)-1, -1)
 		case "pgup":
-			s.jump(max(s.cursor-m.visible(), 0), 1)
+			_, vis := m.fit()
+			s.jump(max(s.cursor-vis, 0), 1)
 		case "pgdown":
-			s.jump(min(s.cursor+m.visible(), len(s.items)-1), -1)
+			_, vis := m.fit()
+			s.jump(min(s.cursor+vis, len(s.items)-1), -1)
 		case "enter", "space", "right", "l":
 			return m, m.choose()
 		case "esc":
@@ -377,21 +392,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // ---- rendering ----
 
 var (
-	accent       = lipgloss.Color("#2997FF")
-	titleStyle   = lipgloss.NewStyle().Bold(true)
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	offStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
-	cursorStyle  = lipgloss.NewStyle().Foreground(accent).Bold(true)
-	crumbStyle   = lipgloss.NewStyle().Foreground(accent)
-	stepStyle    = lipgloss.NewStyle().Bold(true).Underline(true)
-	buttonStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("236")).Padding(0, 1)
-	liveBadge    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#E30000")).Padding(0, 1)
-	vodBadge     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#0071E3")).Padding(0, 1)
-	cursorGlyph  = "❯"
-	separator    = " › "
-	backLabel    = "‹ Back"
-	quitLabel    = "Quit"
-	headerHeight = 6 // title, description, blank, crumbs, blank, step title
+	accent      = lipgloss.Color("#2997FF")
+	titleStyle  = lipgloss.NewStyle().Bold(true)
+	dimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	offStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("239"))
+	cursorStyle = lipgloss.NewStyle().Foreground(accent).Bold(true)
+	crumbStyle  = lipgloss.NewStyle().Foreground(accent)
+	stepStyle   = lipgloss.NewStyle().Bold(true).Underline(true)
+	buttonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Background(lipgloss.Color("236")).Padding(0, 1)
+	liveBadge   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#E30000")).Padding(0, 1)
+	vodBadge    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color("#0071E3")).Padding(0, 1)
+	cursorGlyph = "❯"
+	separator   = " › "
+	backLabel   = "‹ Back"
+	quitLabel   = "Quit"
 )
 
 func init() {
@@ -411,31 +425,66 @@ type hitbox struct {
 	target
 }
 
-// visible is the number of item rows that fit on screen.
-func (m *model) visible() int {
+// Optional lines, dropped in this order when the terminal is too short to
+// show them and a few items.
+const (
+	dropFooterGap   = iota + 1 // blank line above the help
+	dropHelp                   // key and mouse help
+	dropDescription            // event description and the blank after it
+	dropCrumbGap               // blank line after the breadcrumbs
+	dropButtons                // Back and Quit buttons
+	dropTitle                  // app title and badge
+	dropCrumbs                 // breadcrumbs
+	dropHints                  // "more" scroll hints
+)
+
+// fit returns how many optional lines to drop and how many items to show
+// so the view fits the terminal height.
+func (m *model) fit() (drop, vis int) {
 	n := len(m.top().items)
 	if m.height <= 0 {
-		return n
+		return 0, n
 	}
-	// header + blank + scroll hints (2) + blank + help + buttons
-	return max(min(n, m.height-headerHeight-6), 1)
+	for want := min(n, 3); drop < dropHints && chrome(drop)+want > m.height; {
+		drop++
+	}
+	return drop, max(min(n, m.height-chrome(drop)), 1)
+}
+
+// chrome counts the lines other than items left after dropping drop parts.
+func chrome(drop int) int {
+	n := 1 // step title
+	for _, part := range []struct{ level, lines int }{
+		{dropTitle, 1}, {dropDescription, 2}, {dropCrumbs, 1}, {dropCrumbGap, 1},
+		{dropHints, 2}, {dropFooterGap, 1}, {dropHelp, 1}, {dropButtons, 1},
+	} {
+		if drop < part.level {
+			n += part.lines
+		}
+	}
+	return n
 }
 
 func (m *model) layout() ([]string, []hitbox) {
 	s := m.top()
+	drop, vis := m.fit()
 	var lines []string
 	var hits []hitbox
 
-	badge := vodBadge.Render(m.header.Badge)
-	if m.header.Live {
-		badge = liveBadge.Render(m.header.Badge)
+	if drop < dropTitle {
+		badge := vodBadge.Render(m.header.Badge)
+		if m.header.Live {
+			badge = liveBadge.Render(m.header.Badge)
+		}
+		lines = append(lines, " "+titleStyle.Render("Apple Event Streamer")+"  "+badge)
 	}
-	lines = append(lines, " "+titleStyle.Render("Apple Event Streamer")+"  "+badge)
-	desc := m.header.Description
-	if m.width > 4 {
-		desc = ansi.Truncate(desc, m.width-2, "…")
+	if drop < dropDescription {
+		desc := m.header.Description
+		if m.width > 4 {
+			desc = ansi.Truncate(desc, m.width-2, "…")
+		}
+		lines = append(lines, " "+dimStyle.Render(desc), "")
 	}
-	lines = append(lines, " "+dimStyle.Render(desc), "")
 
 	var crumbs []string
 	if m.rng != nil {
@@ -450,12 +499,16 @@ func (m *model) layout() ([]string, []hitbox) {
 	if m.res != nil {
 		crumbs = append(crumbs, catalog.ResolutionLabel(*m.res))
 	}
-	if len(crumbs) == 0 {
+	switch {
+	case drop >= dropCrumbs:
+	case len(crumbs) == 0:
 		lines = append(lines, " "+dimStyle.Render("Choose a stream"))
-	} else {
+	default:
 		lines = append(lines, " "+crumbStyle.Render(strings.Join(crumbs, separator)))
 	}
-	lines = append(lines, "")
+	if drop < dropCrumbGap {
+		lines = append(lines, "")
+	}
 
 	steps := m.steps()
 	pos := 0
@@ -467,7 +520,6 @@ func (m *model) layout() ([]string, []hitbox) {
 	lines = append(lines, " "+stepStyle.Render(stepTitles[s.kind])+dimStyle.Render(fmt.Sprintf("  %d/%d", pos, len(steps))))
 
 	// Keep the cursor inside the scroll window.
-	vis := m.visible()
 	if s.cursor < s.offset {
 		s.offset = s.cursor
 	}
@@ -481,7 +533,9 @@ func (m *model) layout() ([]string, []hitbox) {
 		labelW = max(labelW, lipgloss.Width(it.label))
 	}
 
-	lines = append(lines, scrollHint(s.offset > 0, "▲"))
+	if drop < dropHints {
+		lines = append(lines, scrollHint(s.offset > 0, "▲"))
+	}
 	for i := s.offset; i < s.offset+vis && i < len(s.items); i++ {
 		it := s.items[i]
 		pad := strings.Repeat(" ", labelW-lipgloss.Width(it.label)+3)
@@ -498,9 +552,18 @@ func (m *model) layout() ([]string, []hitbox) {
 		hits = append(hits, hitbox{y: len(lines), x0: 0, x1: 1 << 30, target: target{item: i}})
 		lines = append(lines, row)
 	}
-	lines = append(lines, scrollHint(s.offset+vis < len(s.items), "▼"), "")
-
-	lines = append(lines, " "+dimStyle.Render("↑/↓ move · enter select · ← back · q quit · mouse: click, wheel, right-click back"))
+	if drop < dropHints {
+		lines = append(lines, scrollHint(s.offset+vis < len(s.items), "▼"))
+	}
+	if drop < dropFooterGap {
+		lines = append(lines, "")
+	}
+	if drop < dropHelp {
+		lines = append(lines, " "+dimStyle.Render("↑/↓ move · enter select · ← back · q quit · mouse: click, wheel, right-click back"))
+	}
+	if drop >= dropButtons {
+		return lines, hits
+	}
 	back, quit := buttonStyle.Render(backLabel), buttonStyle.Render(quitLabel)
 	if len(m.stack) == 1 {
 		back = offStyle.Padding(0, 1).Render(backLabel)

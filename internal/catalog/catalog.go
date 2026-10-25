@@ -138,6 +138,8 @@ type Catalog struct {
 	Streams []*Stream
 	// Skipped counts variants that could not be classified.
 	Skipped int
+
+	groups map[[2]string][]*hls.Media // renditions by type and group ID
 }
 
 // New classifies m's variants. When ad is true only audio-description
@@ -145,7 +147,11 @@ type Catalog struct {
 // playlists that list primary and backup endpoints, the first primary
 // copy of each variant wins.
 func New(m *hls.Master, ad bool) *Catalog {
-	c := &Catalog{Master: m, AD: ad}
+	c := &Catalog{Master: m, AD: ad, groups: map[[2]string][]*hls.Media{}}
+	for _, md := range m.Media {
+		k := [2]string{md.Type(), md.GroupID()}
+		c.groups[k] = append(c.groups[k], md)
+	}
 	byKey := map[string]int{}
 	for _, v := range m.Variants {
 		s, ok := c.classify(v)
@@ -234,13 +240,17 @@ func (c *Catalog) classify(v *hls.Variant) (*Stream, bool) {
 // catalog's audio-description mode.
 func (c *Catalog) AudioRenditions(v *hls.Variant) []*hls.Media {
 	var out []*hls.Media
-	for _, md := range c.Master.MediaGroup("AUDIO", v.AudioGroup()) {
+	for _, md := range c.group("AUDIO", v.AudioGroup()) {
 		if md.DescribesVideo() == c.AD {
 			out = append(out, md)
 		}
 	}
 	return out
 }
+
+// group returns the renditions of the given type and group ID, in playlist
+// order.
+func (c *Catalog) group(typ, id string) []*hls.Media { return c.groups[[2]string{typ, id}] }
 
 func isVideoCodec(c string) bool {
 	for _, p := range []string{"avc", "hvc", "hev", "dvh", "dva", "dav", "av01", "vp09"} {
@@ -353,7 +363,7 @@ func (c *Catalog) Heights(f Filter) []int {
 func (c *Catalog) Subtitles(f Filter) []*hls.Media {
 	for _, s := range c.Select(f) {
 		if g := s.Variant.SubtitleGroup(); g != "" {
-			return uniqueLangs(c.Master.MediaGroup("SUBTITLES", g))
+			return uniqueLangs(c.group("SUBTITLES", g))
 		}
 	}
 	return nil
@@ -426,7 +436,7 @@ func (c *Catalog) Build(s *Stream, subs Subs) (*hls.Master, error) {
 
 	var picked []*hls.Media
 	if g := s.Variant.SubtitleGroup(); g != "" {
-		for _, md := range c.Master.MediaGroup("SUBTITLES", g) {
+		for _, md := range c.group("SUBTITLES", g) {
 			if subs.Matches(md) {
 				picked = append(picked, md)
 			}
@@ -469,6 +479,8 @@ func Describe(s *Stream, ad bool) string {
 // ResolutionLabel returns e.g. "1080p" or "2160p (4K)".
 func ResolutionLabel(h int) string {
 	switch h {
+	case 0:
+		return "unknown resolution"
 	case 2160:
 		return "2160p (4K)"
 	case 1440:
