@@ -41,25 +41,43 @@ const name = "apple-event-streamer"
 var version = ""
 
 type options struct {
-	best, noLaunch, keep, verbose, showVersion bool
-	subs, allSubs, ad, asl, list               bool
-	url, mpv, mpvnet, subLang                  string
-	rangeName, audioName, maxRes               string
-	timeout                                    time.Duration
-	playerArgs                                 []string
+	best, noLaunch, verbose, showVersion bool
+	subs, allSubs, ad, asl, list         bool
+	url, mpv, mpvnet, subLang, output    string
+	rangeName, audioName, maxRes         string
+	timeout                              time.Duration
+	playerArgs                           []string
 }
 
 // usageError marks errors that should print a usage hint and exit 2.
 type usageError struct{ error }
 
+// showTrace is --verbose, for crash reports: the stack trace is only
+// printed when it was given.
+var showTrace bool
+
+// reportCrash says what crashed and where to report it. Without --verbose
+// it asks for a rerun with it rather than printing the stack trace.
+func reportCrash(value any) {
+	fmt.Fprintf(os.Stderr, "\n%s %s (%s/%s) crashed: %s\n", name, buildVersion(), runtime.GOOS, runtime.GOARCH, sanitize.Text(fmt.Sprint(value)))
+	const issues = "https://github.com/Mahir007/apple-event-streamer/issues"
+	if showTrace {
+		fmt.Fprintf(os.Stderr, "Please report this, with the output below, at\n%s\n\n", issues)
+	} else {
+		fmt.Fprintf(os.Stderr, "Please report this at %s,\nwith the output of the same command run again with --verbose.\n", issues)
+	}
+}
+
 func main() {
-	// Deferred cleanups (the playlist) have run by now; say what crashed and
-	// where to report it, then let the panic print its stack and exit 2.
+	// Deferred cleanups (the playlist) have run by now. With --verbose the
+	// panic carries on to print its stack trace; either way the exit code is 2.
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "\n%s %s (%s/%s) crashed. Please report this, with the output below, at\nhttps://github.com/Mahir007/apple-event-streamer/issues\n\n",
-				name, buildVersion(), runtime.GOOS, runtime.GOARCH)
-			panic(r)
+			reportCrash(r)
+			if showTrace {
+				panic(r)
+			}
+			os.Exit(2)
 		}
 	}()
 	code, err := run(os.Args[1:])
@@ -82,6 +100,7 @@ func run(args []string) (int, error) {
 	if err != nil {
 		return 2, err
 	}
+	showTrace = o.verbose
 	if o.showVersion {
 		fmt.Printf("%s %s (%s/%s)\n", name, buildVersion(), runtime.GOOS, runtime.GOARCH)
 		return 0, nil
@@ -146,6 +165,10 @@ func run(args []string) (int, error) {
 		if interrupted {
 			return 130, nil
 		}
+		var fe *discover.Error
+		if errors.As(err, &fe) {
+			logf("cause: %v", fe.Err)
+		}
 		return 1, err
 	}
 
@@ -190,6 +213,14 @@ func run(args []string) (int, error) {
 		if errors.Is(err, picker.ErrCancelled) {
 			return 130, nil
 		}
+		var pe *picker.PanicError
+		if errors.As(err, &pe) {
+			reportCrash(pe.Value)
+			if showTrace {
+				fmt.Fprint(os.Stderr, strings.ReplaceAll(pe.Trace, "\r\n", "\n"))
+			}
+			return 2, nil
+		}
 		if err != nil {
 			return 1, err
 		}
@@ -209,7 +240,8 @@ func run(args []string) (int, error) {
 	logf("source: %s", src.url)
 	logf("variant: %s", stream.Variant.URI)
 
-	path, err := writePlaylist(out, src.url, summary)
+	sweepPlaylists(logf)
+	path, err := writePlaylist(out, o.output, src.url, summary)
 	if err != nil {
 		return 1, err
 	}
@@ -231,11 +263,11 @@ func run(args []string) (int, error) {
 	pargs := pl.Args(path, popts)
 	logf("run: %s %s", pl.Path, strings.Join(quoteArgs(pargs), " "))
 
-	if o.keep {
-		fmt.Fprintf(os.Stderr, "Playlist kept at %s\n", path)
+	if o.output != "" {
+		fmt.Fprintf(os.Stderr, "Playlist saved to %s\n", path)
 	}
 	return pl.Run(pargs, func() {
-		if !o.keep {
+		if o.output == "" {
 			os.Remove(path)
 		}
 	})
@@ -247,12 +279,12 @@ type source struct {
 }
 
 func load(ctx context.Context, o *options, logf func(string, ...any)) (*source, *hls.Master, error) {
-	client := &http.Client{Timeout: o.timeout}
+	f := &discover.Fetcher{Client: &http.Client{Timeout: o.timeout}, Logf: logf}
 	src := &source{url: o.url}
 
 	if src.url == "" {
 		logf("discovering stream via %s", discover.EventsPage)
-		ev, err := discover.Find(ctx, client, o.asl)
+		ev, err := f.Find(ctx, o.asl)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -284,7 +316,7 @@ func load(ctx context.Context, o *options, logf func(string, ...any)) (*source, 
 			return nil, nil, usageError{fmt.Errorf("--url %q is neither an http(s) URL nor an existing file", src.url)}
 		}
 		logf("fetching %s", src.url)
-		if body, err = discover.Fetch(ctx, client, src.url); err != nil {
+		if body, err = f.Fetch(ctx, "the stream's playlist", src.url); err != nil {
 			return nil, nil, err
 		}
 		base = u
@@ -376,31 +408,51 @@ func checkSubLangs(subs *catalog.Subs, available []*hls.Media) error {
 	return fmt.Errorf("no subtitles match %s (available: %s)", strings.Join(subs.Langs, ", "), strings.Join(langs, ", "))
 }
 
-// pickBest returns the highest-bandwidth stream. Unset range and audio
-// default to SDR (H.264) and AAC, falling back to the next available kind.
+// pickBest returns the highest-bandwidth stream of the preset's range and
+// audio, SDR (H.264) and AAC when they are not set.
 func pickBest(c *catalog.Catalog, p picker.Preset) (*catalog.Stream, error) {
-	ranges := []catalog.Range{catalog.SDR, catalog.SDRHEVC, catalog.HDR10, catalog.DolbyVision, catalog.HLG}
+	r, a := catalog.SDR, catalog.AAC
 	if p.Range != nil {
-		ranges = []catalog.Range{*p.Range}
+		r = *p.Range
 	}
-	audios := []catalog.Audio{catalog.AAC, catalog.Atmos, catalog.EAC3, catalog.AC3, catalog.OtherAudio}
 	if p.Audio != nil {
-		audios = []catalog.Audio{*p.Audio}
+		a = *p.Audio
 	}
-	for _, r := range ranges {
-		for _, a := range audios {
-			if s := c.Select(catalog.Filter{Range: &r, Audio: &a, MaxHeight: p.MaxHeight}); len(s) > 0 {
-				return s[0], nil
-			}
-		}
+	if s := c.Select(catalog.Filter{Range: &r, Audio: &a, MaxHeight: p.MaxHeight}); len(s) > 0 {
+		return s[0], nil
 	}
-	return nil, errors.New("no stream matches --range/--audio/--max-res; run with --list to see what is available")
+	limit := ""
+	if p.MaxHeight > 0 {
+		limit = fmt.Sprintf(" up to %dp", p.MaxHeight)
+	}
+	return nil, fmt.Errorf("no %s + %s stream%s in this playlist; run with --list to see what is available", r, a, limit)
 }
 
-func writePlaylist(m *hls.Master, src, summary string) (string, error) {
+// Temporary playlists are named playlistPrefix + a shortid + ".m3u8".
+const playlistPrefix = "apple-event-"
+
+// writePlaylist writes m to a new file in the temp folder, or to output
+// when it is set: into it when it is a folder (or ends in a separator),
+// otherwise to that file, replacing it.
+func writePlaylist(m *hls.Master, output, src, summary string) (string, error) {
+	dir, named := os.TempDir(), ""
+	if output != "" {
+		st, err := os.Stat(output)
+		switch {
+		case err == nil && st.IsDir(), strings.HasSuffix(output, "/"), strings.HasSuffix(output, string(filepath.Separator)):
+			dir = output
+		case err == nil && !st.Mode().IsRegular():
+			return "", fmt.Errorf("--output %s is not a regular file", output)
+		default:
+			named = output
+		}
+	}
 	for attempt := 0; ; attempt++ {
-		path := filepath.Join(os.TempDir(), "apple-event-"+shortid.New()+".m3u8")
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		path, flags := named, os.O_WRONLY|os.O_CREATE|os.O_TRUNC
+		if path == "" {
+			path, flags = filepath.Join(dir, playlistPrefix+shortid.New()+".m3u8"), os.O_WRONLY|os.O_CREATE|os.O_EXCL
+		}
+		f, err := os.OpenFile(path, flags, 0o644)
 		if errors.Is(err, os.ErrExist) && attempt < 3 {
 			continue
 		}
@@ -420,6 +472,32 @@ func writePlaylist(m *hls.Master, src, summary string) (string, error) {
 			return "", fmt.Errorf("writing playlist: %w", err)
 		}
 		return path, nil
+	}
+}
+
+// sweepPlaylists deletes temporary playlists from runs that never got to
+// clean up (killed, crashed, power lost). Kept playlists live wherever
+// --output put them, so a temp file with exactly our name pattern is
+// disposable once it is a day old, far longer than any event.
+func sweepPlaylists(logf func(string, ...any)) {
+	dir := os.TempDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		id, ok := strings.CutPrefix(e.Name(), playlistPrefix)
+		id, ok2 := strings.CutSuffix(id, ".m3u8")
+		if !ok || !ok2 || !shortid.Valid(id) || !e.Type().IsRegular() {
+			continue
+		}
+		if info, err := e.Info(); err != nil || time.Since(info.ModTime()) < 24*time.Hour {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if err := os.Remove(p); err == nil {
+			logf("removed stale playlist %s", p)
+		}
 	}
 }
 
@@ -546,7 +624,8 @@ func parseFlags(args []string) (*options, error) {
 	fs.BoolVar(&o.best, "best", false, "")
 	fs.StringVar(&o.url, "url", "", "")
 	fs.BoolVar(&o.noLaunch, "no-launch", false, "")
-	fs.BoolVar(&o.keep, "keep-playlist", false, "")
+	fs.StringVar(&o.output, "output", "", "")
+	fs.StringVar(&o.output, "o", "", "")
 	fs.StringVar(&o.mpv, "mpv", "", "")
 	fs.StringVar(&o.mpvnet, "mpvnet", "", "")
 	fs.Var(secondsFlag{&o.timeout}, "timeout", "")
@@ -633,7 +712,10 @@ Source:
 
 Playback:
   --no-launch         write the playlist and print its path; don't play
-  --keep-playlist     don't delete the playlist after the player exits
+  -o, --output PATH   save the playlist to PATH (a file, or a folder to put
+                      it in) and keep it; otherwise it goes to the temp
+                      folder, is deleted when the player exits, and any
+                      left behind are cleared after a day
   --mpv PATH          use this mpv executable
   --mpvnet PATH       use this mpv.net executable
                       (default: mpvnet then mpv on Windows, mpv elsewhere)
@@ -651,6 +733,7 @@ Examples:
   %[1]s --subs
   %[1]s --best --sub-lang en --ad
   %[1]s --url https://example.com/master.m3u8 --no-launch
+  %[1]s --best -o ~/Downloads/
   %[1]s --best -- --fs --volume=70
 `, name, buildVersion())
 }

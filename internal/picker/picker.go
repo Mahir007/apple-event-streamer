@@ -5,6 +5,7 @@ package picker
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -19,6 +20,13 @@ import (
 
 // ErrCancelled is returned when the user quits without choosing.
 var ErrCancelled = errors.New("cancelled")
+
+// PanicError is returned when the picker panicked. Bubble Tea has already
+// restored the terminal; Value is the panic value and Trace is its report
+// with the stack, for the caller to show or not.
+type PanicError struct{ Value, Trace string }
+
+func (e *PanicError) Error() string { return "picker panicked: " + e.Value }
 
 // Header is shown above the menus.
 type Header struct {
@@ -47,7 +55,14 @@ type Result struct {
 // Run shows the picker on stderr and returns the selection.
 func Run(c *catalog.Catalog, h Header, p Preset) (*Result, error) {
 	m := newModel(c, h, p)
-	final, err := tea.NewProgram(m, tea.WithOutput(os.Stderr)).Run()
+	prog := tea.NewProgram(m, tea.WithOutput(os.Stderr))
+	restore := captureStderr()
+	final, err := prog.Run()
+	captured := restore()
+	if errors.Is(err, tea.ErrProgramPanic) {
+		return nil, &PanicError{Value: panicValue(captured), Trace: captured}
+	}
+	os.Stderr.WriteString(captured) // nothing else is expected, but don't lose it
 	if errors.Is(err, tea.ErrInterrupted) {
 		return nil, ErrCancelled
 	}
@@ -59,6 +74,40 @@ func Run(c *catalog.Catalog, h Header, p Preset) (*Result, error) {
 		return nil, ErrCancelled
 	}
 	return fm.result, nil
+}
+
+// captureStderr points os.Stderr at a pipe until the returned function is
+// called, which restores it and returns what was written. Bubble Tea writes
+// its panic report and stack there; the picker itself draws through the
+// *os.File given to WithOutput, which this doesn't touch.
+func captureStderr() (restore func() string) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return func() string { return "" }
+	}
+	orig := os.Stderr
+	os.Stderr = w
+	done := make(chan string)
+	go func() {
+		b, _ := io.ReadAll(r)
+		r.Close()
+		done <- string(b)
+	}()
+	return func() string {
+		os.Stderr = orig
+		w.Close()
+		return <-done
+	}
+}
+
+// panicValue extracts the panic value from Bubble Tea's report:
+// "Caught panic:\r\n\r\n<value>\r\n\r\nRestoring terminal...".
+func panicValue(report string) string {
+	_, v, ok := strings.Cut(report, "Caught panic:\r\n\r\n")
+	if v, _, ok2 := strings.Cut(v, "\r\n\r\nRestoring terminal"); ok && ok2 {
+		return strings.ReplaceAll(v, "\r\n", "\n")
+	}
+	return "unknown panic in the picker"
 }
 
 type stepKind int

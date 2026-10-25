@@ -12,8 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"html"
-	"io"
-	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -26,10 +24,6 @@ const EventsPage = "https://www.apple.com/apple-events/"
 // browsers and tools, but some CDNs are picky about empty agents.
 const UserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
 
-// MaxBody is the most Fetch and ReadLimited accept. Apple's pages and
-// playlists are well under 1 MiB.
-const MaxBody = 16 << 20
-
 // Event describes the stream advertised by the events page.
 type Event struct {
 	// URL is the master playlist URL.
@@ -41,58 +35,69 @@ type Event struct {
 }
 
 type urlJSON struct {
-	VideoSrc struct {
+	VideoSrc *struct {
 		HLS    string `json:"hls"`
 		HLSASL string `json:"hlsASL"`
 	} `json:"videoSrc"`
 	State string `json:"state"`
 }
 
+// formatHint ends errors about pages that don't look the way Apple's do.
+const formatHint = "Apple may have changed the page; pass --url instead"
+
 var metaTag = regexp.MustCompile(`(?is)<meta\b[^>]*>`)
 var tagAttr = regexp.MustCompile(`(?is)([a-z:-]+)\s*=\s*("[^"]*"|'[^']*')`)
 
 // Find fetches the events page and resolves the current master playlist.
 // When asl is true the American Sign Language version is returned.
-func Find(ctx context.Context, client *http.Client, asl bool) (*Event, error) {
-	page, err := Fetch(ctx, client, EventsPage)
+func (f *Fetcher) Find(ctx context.Context, asl bool) (*Event, error) {
+	page, err := f.Fetch(ctx, "the Apple Events page", EventsPage)
 	if err != nil {
 		return nil, err
 	}
 	meta := metaContents(string(page))
 	if meta["url-json"] == "" {
-		return nil, errors.New("could not find the event stream on " + EventsPage + " (no url-json meta tag); pass --url instead")
+		return nil, errors.New("the Apple Events page doesn't say where the event stream is (no url-json tag); " + formatHint)
 	}
 	jsonURL, err := resolveHTTP(EventsPage, meta["url-json"])
 	if err != nil {
-		return nil, fmt.Errorf("%s: url-json: %w", EventsPage, err)
+		return nil, fmt.Errorf("the Apple Events page points at an unusable address (%w); %s", err, formatHint)
 	}
 
-	body, err := Fetch(ctx, client, jsonURL)
+	body, err := f.Fetch(ctx, "the event details", jsonURL)
 	if err != nil {
 		return nil, err
 	}
 	var doc urlJSON
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return nil, fmt.Errorf("decoding %s: %w", jsonURL, err)
+		return nil, fmt.Errorf("the event details aren't in the expected format (%w); %s", err, formatHint)
+	}
+	if doc.VideoSrc == nil && doc.State == "" {
+		return nil, errors.New("the event details list no stream and no state; " + formatHint)
 	}
 
-	ev := &Event{URL: doc.VideoSrc.HLS, State: doc.State, Description: meta["description"]}
-	if asl {
-		ev.URL = doc.VideoSrc.HLSASL
+	ev := &Event{State: doc.State, Description: meta["description"]}
+	if doc.VideoSrc != nil {
+		ev.URL = doc.VideoSrc.HLS
+		if asl {
+			ev.URL = doc.VideoSrc.HLSASL
+		}
 	}
 	if ev.URL == "" {
 		kind := "stream"
 		if asl {
 			kind = "sign-language stream"
 		}
-		state := doc.State
-		if state == "" {
-			state = "unknown"
+		switch {
+		case !asl && (doc.State == "live" || doc.State == "vod"): // an event may lack an ASL version
+			return nil, fmt.Errorf("the event details say %q but list no %s; %s", doc.State, kind, formatHint)
+		case doc.State == "":
+			doc.State = "unknown"
 		}
-		return nil, fmt.Errorf("the events page has no %s right now (state: %s); try again closer to the event or pass --url", kind, state)
+		return nil, fmt.Errorf("the events page has no %s right now (state: %s); try again closer to the event or pass --url", kind, doc.State)
 	}
 	if ev.URL, err = resolveHTTP(jsonURL, ev.URL); err != nil {
-		return nil, fmt.Errorf("%s: stream URL: %w", jsonURL, err)
+		return nil, fmt.Errorf("the event details point at an unusable stream address (%w); %s", err, formatHint)
 	}
 	return ev, nil
 }
@@ -134,36 +139,4 @@ func metaContents(page string) map[string]string {
 		}
 	}
 	return out
-}
-
-// Fetch GETs url and returns the body, failing on non-2xx responses.
-func Fetch(ctx context.Context, client *http.Client, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", UserAgent)
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
-	}
-	body, err := ReadLimited(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", url, err)
-	}
-	return body, nil
-}
-
-// ReadLimited reads r to the end, failing if it holds more than MaxBody
-// bytes rather than silently using a truncated prefix.
-func ReadLimited(r io.Reader) ([]byte, error) {
-	b, err := io.ReadAll(io.LimitReader(r, MaxBody+1))
-	if err == nil && len(b) > MaxBody {
-		return nil, fmt.Errorf("larger than %d MiB", MaxBody>>20)
-	}
-	return b, err
 }

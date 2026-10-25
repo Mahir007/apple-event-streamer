@@ -1,6 +1,7 @@
 package hls
 
 import (
+	"errors"
 	"net/url"
 	"os"
 	"strings"
@@ -85,5 +86,26 @@ func TestParseRejectsMediaPlaylist(t *testing.T) {
 	_, err := Parse(strings.NewReader("#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nseg.ts\n"), nil)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// TestParseRejectsEmpty covers playlists that arrive empty or cut short,
+// as a broken CDN or a changed URL might serve them.
+func TestParseRejectsEmpty(t *testing.T) {
+	for in, want := range map[string]string{
+		"":                       "missing #EXTM3U header",
+		"\n\r\n  \n":             "missing #EXTM3U header",
+		"\ufeff":                 "missing #EXTM3U header",
+		"<html>Not found</html>": "missing #EXTM3U header",
+		"#EXTM3U":                "no variant streams found",
+		"#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n":    "no variant streams found",
+		"#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",URI=\"a\"\n": "no variant streams found",
+		"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n":                    "no variant streams found",
+		"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\n# comment, no URI\n": "no variant streams found",
+	} {
+		m, err := Parse(strings.NewReader(in), nil)
+		if !errors.Is(err, ErrNotMaster) || !strings.Contains(err.Error(), want) {
+			t.Errorf("Parse(%q) = %v, %v; want ErrNotMaster with %q", in, m, err, want)
+		}
 	}
 }

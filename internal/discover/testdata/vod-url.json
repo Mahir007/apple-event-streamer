@@ -1,0 +1,49 @@
+{
+    "videoSrc": {
+        "hls": "https://events-delivery.apple.com/7297ElpSMNn2LZPPl9vkFV7w9WXbjB5s/m3u8/vod_main_JeyvV5ESJWYBatM.m3u8",
+        "hlsASL": "https://events-delivery.apple.com/7297ElpSMNn2LZPPl9vkFV7w9WXbjB5s/m3u8/vod_asl_XPmKnxT3H0SIbBD.m3u8"
+   },
+    "state": "vod",
+    "chapters": [
+      {
+         "chapter": 1,
+         "start-time": 0,
+         "titles": [{
+            "language": "eng",
+            "title": "Introduction"
+         }]
+      },
+      {
+         "chapter": 2,
+         "start-time": 396,
+         "titles": [{
+            "language": "eng",
+            "title": "iPhone 18 Pro"
+         }]
+      },
+      {
+         "chapter": 3,
+         "start-time": 1814,
+         "titles": [{
+            "language": "eng",
+            "title": "AirPods 5"
+         }]
+      },
+      {
+         "chapter": 4,
+         "start-time": 2145,
+         "titles": [{
+            "language": "eng",
+            "title": "Apple Watch"
+         }]
+      },
+      {
+         "chapter": 5,
+         "start-time": 3159,
+         "titles": [{
+            "language": "eng",
+            "title": "iPhone Duo"
+         }]
+      }
+   ]
+}

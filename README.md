@@ -20,7 +20,7 @@ apple-event-streamer                 # interactive picker
 apple-event-streamer --best          # highest-bitrate SDR + AAC rendition
 apple-event-streamer --url URL       # use a supplied master playlist (URL or file)
 apple-event-streamer --no-launch     # create and print playlist path only
-apple-event-streamer --keep-playlist # preserve the temporary playlist after mpv exits
+apple-event-streamer -o PATH        # save the playlist to PATH (file or folder) and keep it
 apple-event-streamer --mpv PATH      # explicit mpv executable
 apple-event-streamer --mpvnet PATH   # explicit mpvnet executable
 apple-event-streamer --timeout SEC   # network timeout (default 20)
@@ -74,13 +74,16 @@ included, `strict=experimental` is added to the same option because FFmpeg's
 HLS demuxer otherwise ignores subtitle renditions.
 
 On every platform the player runs in the same terminal and the app waits for
-it, then deletes the playlist (unless `--keep-playlist`) and exits with the
+it, then deletes the playlist (unless it was saved with `-o`) and exits with the
 player's exit code, so prompt timers measure from launch to player exit.
 
 ## Playlists
 
 The output is written to `<temp>/apple-event-<short-uuid>.m3u8` (a 22-character
-base57 UUID) and contains one `EXT-X-STREAM-INF`, its audio rendition and, only
+base57 UUID), or with `-o`/`--output` to a file or folder of your choice, where
+it is kept. Temporary playlists are deleted when the player exits; any left
+behind by a run that was killed are cleared by the next run once they are a
+day old. The playlist contains one `EXT-X-STREAM-INF`, its audio rendition and, only
 if requested, its subtitles. I-frame playlists are dropped. For live events,
 Apple lists each variant on primary and backup endpoints; the first primary
 endpoint is used and backups (`-b` groups/hosts) are discarded.
