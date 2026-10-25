@@ -33,6 +33,7 @@ import (
 	"github.com/Mahir007/apple-event-streamer/internal/player"
 	"github.com/Mahir007/apple-event-streamer/internal/sanitize"
 	"github.com/Mahir007/apple-event-streamer/internal/shortid"
+	"github.com/Mahir007/apple-event-streamer/internal/userdirs"
 )
 
 const name = "apple-event-streamer"
@@ -41,12 +42,12 @@ const name = "apple-event-streamer"
 var version = ""
 
 type options struct {
-	best, noLaunch, verbose, showVersion bool
-	subs, allSubs, ad, asl, list         bool
-	url, mpv, mpvnet, subLang, output    string
-	rangeName, audioName, maxRes         string
-	timeout                              time.Duration
-	playerArgs                           []string
+	best, noLaunch, keep, verbose, showVersion bool
+	subs, allSubs, ad, asl, list               bool
+	url, mpv, mpvnet, subLang, keepDir         string
+	rangeName, audioName, maxRes               string
+	timeout                                    time.Duration
+	playerArgs                                 []string
 }
 
 // usageError marks errors that should print a usage hint and exit 2.
@@ -148,13 +149,21 @@ func run(args []string) (int, error) {
 		return 2, usageError{errors.New("the interactive picker needs a terminal; use --best for non-interactive use")}
 	}
 
-	// Find the player first so a missing mpv is reported before any menus.
+	// Find the player and the --keep-playlist folder first, so problems
+	// with either are reported before any downloads or menus.
 	var pl *player.Player
 	if !o.noLaunch && !o.list {
 		if pl, err = player.Find(o.mpv, o.mpvnet); err != nil {
 			return 1, err
 		}
 		logf("player: %s (%s)", pl.Path, pl.Kind)
+	}
+	dir := os.TempDir()
+	if o.keep && !o.list {
+		if dir, err = keepFolder(o.keepDir); err != nil {
+			return 1, err
+		}
+		logf("keeping the playlist in %s", dir)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -241,7 +250,7 @@ func run(args []string) (int, error) {
 	logf("variant: %s", stream.Variant.URI)
 
 	sweepPlaylists(logf)
-	path, err := writePlaylist(out, o.output, src.url, summary)
+	path, err := writePlaylist(out, dir, src.url, summary)
 	if err != nil {
 		return 1, err
 	}
@@ -263,11 +272,11 @@ func run(args []string) (int, error) {
 	pargs := pl.Args(path, popts)
 	logf("run: %s %s", pl.Path, strings.Join(quoteArgs(pargs), " "))
 
-	if o.output != "" {
-		fmt.Fprintf(os.Stderr, "Playlist saved to %s\n", path)
+	if o.keep {
+		fmt.Fprintf(os.Stderr, "Playlist kept at %s\n", path)
 	}
 	return pl.Run(pargs, func() {
-		if o.output == "" {
+		if !o.keep {
 			os.Remove(path)
 		}
 	})
@@ -431,28 +440,11 @@ func pickBest(c *catalog.Catalog, p picker.Preset) (*catalog.Stream, error) {
 // Temporary playlists are named playlistPrefix + a shortid + ".m3u8".
 const playlistPrefix = "apple-event-"
 
-// writePlaylist writes m to a new file in the temp folder, or to output
-// when it is set: into it when it is a folder (or ends in a separator),
-// otherwise to that file, replacing it.
-func writePlaylist(m *hls.Master, output, src, summary string) (string, error) {
-	dir, named := os.TempDir(), ""
-	if output != "" {
-		st, err := os.Stat(output)
-		switch {
-		case err == nil && st.IsDir(), strings.HasSuffix(output, "/"), strings.HasSuffix(output, string(filepath.Separator)):
-			dir = output
-		case err == nil && !st.Mode().IsRegular():
-			return "", fmt.Errorf("--output %s is not a regular file", output)
-		default:
-			named = output
-		}
-	}
+// writePlaylist writes m to a new, uniquely named file in dir.
+func writePlaylist(m *hls.Master, dir, src, summary string) (string, error) {
 	for attempt := 0; ; attempt++ {
-		path, flags := named, os.O_WRONLY|os.O_CREATE|os.O_TRUNC
-		if path == "" {
-			path, flags = filepath.Join(dir, playlistPrefix+shortid.New()+".m3u8"), os.O_WRONLY|os.O_CREATE|os.O_EXCL
-		}
-		f, err := os.OpenFile(path, flags, 0o644)
+		path := filepath.Join(dir, playlistPrefix+shortid.New()+".m3u8")
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 		if errors.Is(err, os.ErrExist) && attempt < 3 {
 			continue
 		}
@@ -476,9 +468,9 @@ func writePlaylist(m *hls.Master, output, src, summary string) (string, error) {
 }
 
 // sweepPlaylists deletes temporary playlists from runs that never got to
-// clean up (killed, crashed, power lost). Kept playlists live wherever
-// --output put them, so a temp file with exactly our name pattern is
-// disposable once it is a day old, far longer than any event.
+// clean up (killed, crashed, power lost). Kept playlists go to Downloads or
+// the --keep-playlist folder, so a temp file with exactly our name pattern
+// is disposable once it is a day old, far longer than any event.
 func sweepPlaylists(logf func(string, ...any)) {
 	dir := os.TempDir()
 	entries, err := os.ReadDir(dir)
@@ -499,6 +491,40 @@ func sweepPlaylists(logf func(string, ...any)) {
 			logf("removed stale playlist %s", p)
 		}
 	}
+}
+
+// keepFolder returns the folder for --keep-playlist, creating it if
+// needed: dir, with a leading ~ meaning the home folder (shells don't
+// expand it after = or on Windows, and a folder literally named ~ is a
+// trap), or the user's Downloads folder when dir is empty.
+func keepFolder(dir string) (string, error) {
+	if dir == "" {
+		d, err := userdirs.Downloads()
+		if err != nil {
+			return "", fmt.Errorf("--keep-playlist: %w; name a folder instead", err)
+		}
+		dir = d
+	} else if rest, ok := strings.CutPrefix(dir, "~"); ok && (rest == "" || os.IsPathSeparator(rest[0])) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("--keep-playlist %s: %w", dir, err)
+		}
+		dir = filepath.Join(home, rest)
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs // so "Playlist kept at" shows where it really is
+	}
+	if st, err := os.Stat(dir); err == nil && !st.IsDir() {
+		return "", fmt.Errorf("--keep-playlist: %s is a file, not a folder", dir)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		var pe *os.PathError
+		if errors.As(err, &pe) {
+			err = pe.Err
+		}
+		return "", fmt.Errorf("--keep-playlist: couldn't create %s: %w", dir, err)
+	}
+	return dir, nil
 }
 
 func printList(w io.Writer, c *catalog.Catalog) {
@@ -616,6 +642,47 @@ func (f secondsFlag) Set(s string) error {
 	return nil
 }
 
+// keepFlag is --keep-playlist [FOLDER]. On its own (Set("true")) it keeps
+// the playlist in Downloads; --keep-playlist=FOLDER keeps it in FOLDER.
+type keepFlag struct{ o *options }
+
+func (keepFlag) IsBoolFlag() bool { return true }
+func (keepFlag) String() string   { return "" }
+
+func (k keepFlag) Set(s string) error {
+	switch s {
+	case "true":
+		k.o.keep = true
+	case "false":
+		k.o.keep, k.o.keepDir = false, ""
+	default:
+		k.o.keep, k.o.keepDir = true, s
+	}
+	return nil
+}
+
+// joinKeepFolder lets --keep-playlist take its folder as the next argument.
+// The flag package has no optional values, so "--keep-playlist F" becomes
+// "--keep-playlist=F" when F is not empty and doesn't start with "-" (this
+// app takes no other bare arguments). Nothing after "--" is touched: that
+// belongs to the player.
+func joinKeepFolder(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return append(out, args[i:]...)
+		}
+		if (a == "--keep-playlist" || a == "-keep-playlist") && i+1 < len(args) &&
+			args[i+1] != "" && !strings.HasPrefix(args[i+1], "-") {
+			i++
+			a += "=" + args[i]
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 func parseFlags(args []string) (*options, error) {
 	o := &options{timeout: 20 * time.Second}
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
@@ -624,8 +691,7 @@ func parseFlags(args []string) (*options, error) {
 	fs.BoolVar(&o.best, "best", false, "")
 	fs.StringVar(&o.url, "url", "", "")
 	fs.BoolVar(&o.noLaunch, "no-launch", false, "")
-	fs.StringVar(&o.output, "output", "", "")
-	fs.StringVar(&o.output, "o", "", "")
+	fs.Var(keepFlag{o}, "keep-playlist", "")
 	fs.StringVar(&o.mpv, "mpv", "", "")
 	fs.StringVar(&o.mpvnet, "mpvnet", "", "")
 	fs.Var(secondsFlag{&o.timeout}, "timeout", "")
@@ -644,6 +710,7 @@ func parseFlags(args []string) (*options, error) {
 	help := fs.Bool("help", false, "")
 	fs.BoolVar(help, "h", false, "")
 
+	args = joinKeepFolder(args)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			printUsage(os.Stdout)
@@ -712,10 +779,10 @@ Source:
 
 Playback:
   --no-launch         write the playlist and print its path; don't play
-  -o, --output PATH   save the playlist to PATH (a file, or a folder to put
-                      it in) and keep it; otherwise it goes to the temp
-                      folder, is deleted when the player exits, and any
-                      left behind are cleared after a day
+  --keep-playlist [FOLDER]
+                      keep the playlist in FOLDER (created if needed), or
+                      in your Downloads folder, instead of deleting it when
+                      the player exits
   --mpv PATH          use this mpv executable
   --mpvnet PATH       use this mpv.net executable
                       (default: mpvnet then mpv on Windows, mpv elsewhere)
@@ -733,7 +800,8 @@ Examples:
   %[1]s --subs
   %[1]s --best --sub-lang en --ad
   %[1]s --url https://example.com/master.m3u8 --no-launch
-  %[1]s --best -o ~/Downloads/
+  %[1]s --best --keep-playlist
+  %[1]s --best --keep-playlist Videos/Playlists
   %[1]s --best -- --fs --volume=70
 `, name, buildVersion())
 }
