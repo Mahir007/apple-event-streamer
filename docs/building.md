@@ -22,7 +22,9 @@ To build a release with a newer local Go, let Go fetch the pinned version:
 GOTOOLCHAIN=go$(cat .go-version) make package
 ```
 
-Binaries are built with `CGO_ENABLED=0 -trimpath -ldflags "-s -w"`.
+Binaries are built with `CGO_ENABLED=0 -trimpath -tags nethttpomithttp2
+-ldflags "-s -w"`. The tag leaves out HTTP/2, which saves about 400 KB: the
+app only fetches three small files, and mpv does the streaming.
 
 ## Archives
 
