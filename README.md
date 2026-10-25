@@ -1,177 +1,140 @@
 # apple-event-streamer
 
-Watch the current [Apple Event](https://www.apple.com/apple-events/) — live or
-replay — in [mpv](https://mpv.io) or [mpv.net](https://github.com/mpvnet-player/mpv.net),
-at exactly the quality you choose.
+Plays the current [Apple Event](https://www.apple.com/apple-events/) (live or
+replay) in [mpv](https://mpv.io) or
+[mpv.net](https://github.com/mpvnet-player/mpv.net).
 
-It finds the event's master playlist, lets you pick one rendition
-(video › audio › resolution › bitrate), writes a single-rendition
-`.m3u8` to the system temp folder and hands the terminal over to the player.
-The command lasts until you quit the player, then the playlist is deleted.
+```
+ Apple Event Streamer   VOD
 
-Single self-contained executable for Windows and Linux (x64 and arm64) and
-macOS (one universal2 binary for Intel and Apple silicon, macOS 12 Monterey or
-later). No runtime dependencies other than the player.
+ Choose a stream
+
+ Video  1/4
+
+ ❯ SDR            H.264 / AVC
+   SDR [HEVC]     H.265 / HEVC
+   HDR10          HEVC · PQ
+   Dolby Vision   HEVC · PQ + Dolby Vision metadata
+
+ ↑/↓ move · enter select · ← back · q quit · mouse: click, wheel, right-click back
+  ‹ Back    Quit
+```
+
+## Quick start
+
+You need mpv, or mpv.net on Windows. Download the app from
+[Releases](https://github.com/Mahir007/apple-event-streamer/releases), then:
+
+```sh
+apple-event-streamer          # pick a stream from a menu
+apple-event-streamer --best   # highest-bitrate SDR + AAC stream
+apple-event-streamer --list   # list every stream
+```
+
+## Installing
+
+Download the archive for your system, extract it and put
+`apple-event-streamer` somewhere on your `PATH`.
+
+| System | Archive | Needs |
+| --- | --- | --- |
+| Windows x64 / arm64 | `…_windows-amd64.zip`, `…_windows-arm64.zip` | Windows 10 or later |
+| macOS (Intel and Apple silicon) | `…_darwin-universal.tar.xz` | macOS 12 Monterey or later |
+| Linux x64 / arm64 | `…_linux-amd64.tar.xz`, `…_linux-arm64.tar.xz` | any distribution |
+
+Each archive comes with a `.sha256` file. Check it with
+`sha256sum -c <archive>.sha256`, or `shasum -a 256 -c <archive>.sha256` on
+macOS. On macOS, see [Troubleshooting](#troubleshooting) if the app won't
+open.
 
 ## Usage
 
 ```
-apple-event-streamer                          # interactive picker
-apple-event-streamer --best                   # highest-bitrate SDR + AAC rendition
-apple-event-streamer --url URL                # use a supplied master playlist (URL or file)
-apple-event-streamer --no-launch              # create and print playlist path only
-apple-event-streamer --keep-playlist [FOLDER] # keep the playlist (default: Downloads)
-apple-event-streamer --mpv PATH               # explicit mpv executable
-apple-event-streamer --mpvnet PATH            # explicit mpvnet executable
-apple-event-streamer --timeout SEC            # network timeout (default 20)
-apple-event-streamer --verbose
-apple-event-streamer --version
-apple-event-streamer --help
+apple-event-streamer [options] [-- player options]
 ```
 
-Selection options combine freely, e.g. `--best --sub-lang en --ad`:
-
-| Option | Meaning |
+| Option | What it does |
 | --- | --- |
-| `--best` | Pick the highest-bitrate stream without asking (SDR + AAC unless `--range`/`--audio` say otherwise). |
-| `--range sdr\|hevc\|hdr10\|dv` | Video range: SDR (H.264), SDR [HEVC], HDR10, Dolby Vision. Skips that menu. |
-| `--audio aac\|atmos` | Audio format. Skips that menu. |
+| `--best` | Pick the highest-bitrate SDR + AAC stream (or the `--range`/`--audio` given) without the menu. |
+| `--range sdr\|hevc\|hdr10\|dv` | Video type: SDR (H.264), SDR [HEVC], HDR10 or Dolby Vision. Skips that step. |
+| `--audio aac\|atmos` | Audio: AAC stereo or Dolby Atmos. Skips that step. |
 | `--max-res RES` | Highest resolution to offer, e.g. `1080`, `1440p`, `4k`. |
-| `--subs` | Show a subtitles step in the picker (after audio). Not usable with `--best`. |
-| `--sub-lang LANGS` | Include these subtitle languages, e.g. `en` or `en,fr`. `en` also matches `en-GB`, `zh` matches every Chinese track. |
+| `--subs` | Add a subtitles step to the picker. Not with `--best`. |
+| `--sub-lang LANGS` | Include these subtitle languages, e.g. `en` or `en,fr`. `en` also matches `en-GB`. |
 | `--all-subs` | Include every subtitle language. |
-| `--ad` | Use audio-description tracks *instead of* regular audio. Off by default. |
-| `--asl` | Play the American Sign Language version of the event. |
-| `--list` | Print every available stream and exit. |
+| `--ad` | Use audio description instead of the normal audio. |
+| `--asl` | Play the American Sign Language version. |
+| `--list` | Print every stream and exit. |
+| `--url URL` | Use this master playlist (a URL or a file) instead of finding the event. |
+| `--timeout SEC` | Network timeout in seconds. Default 20. |
+| `--no-launch` | Write the playlist and print its path, but don't play it. |
+| `--keep-playlist [FOLDER]` | Keep the playlist in your Downloads folder, or in `FOLDER`. |
+| `--mpv PATH` | Use this mpv. |
+| `--mpvnet PATH` | Use this mpv.net. |
+| `-v`, `--verbose` | Print details of what's happening. |
+| `--version` | Print the version. |
+| `-h`, `--help` | Show help. |
 | `-- ARGS` | Pass everything after `--` to the player, e.g. `-- --fs --volume=70`. |
 
-### Interactive picker
+Examples:
 
-`↑`/`↓` (or `j`/`k`) to move, `Enter`/`→` to choose, `←`/`Esc`/`Backspace` to
-go back, `1`–`9` to choose directly, `q` to quit. The mouse works too: click to
-choose, scroll to move, right-click (or the *Back* button) to go back.
+```sh
+apple-event-streamer --best --range dv --audio atmos
+apple-event-streamer --best --sub-lang en --ad
+apple-event-streamer --best --keep-playlist Videos/Playlists
+```
 
-All four video ranges are always listed; any the playlist doesn't carry
-(the live stream has no HDR10, for example) is greyed out and skipped by the
-cursor.
+### The picker
 
-Subtitles are left out unless you ask for them: `--subs` adds a subtitles
-step after audio (*All languages* or a single language), while `--sub-lang`
-and `--all-subs` choose up front and work with `--best` too.
+Use `↑`/`↓` or `j`/`k` to move, `Enter` or `→` to choose, `←`, `Esc` or
+`Backspace` to go back, `1`–`9` to choose directly and `q` to quit. The mouse
+works too.
 
-## Player
+Video types the event doesn't have (e.g. HDR10 for live events) are greyed
+out.
 
-* **Windows:** `mpvnet` on `PATH` is preferred, falling back to `mpv`.
-  mpv.net is started with `--process-instance=multi` so it can't hand the file
-  to an already-running window and exit early.
-* **macOS / Linux:** `mpv` on `PATH` (plus common install locations such as
-  `/Applications/mpv.app`).
+### Players
 
-The player always gets
-`--demuxer-lavf-o=protocol_whitelist="file,crypto,data,https,http,tls,tcp"`,
-which lets a local playlist reference `https` streams. When subtitles are
-included, `strict=experimental` is added to the same option because FFmpeg's
-HLS demuxer otherwise ignores subtitle renditions.
+On Windows the app uses mpv.net if it's on your `PATH`, and mpv if not. On
+macOS and Linux it uses mpv. It also looks in common install folders, such as
+`/Applications/mpv.app`.
 
-On every platform the player runs in the same terminal and the app waits for
-it, then deletes the playlist (unless `--keep-playlist`) and exits with the
-player's exit code, so prompt timers measure from launch to player exit.
+The player runs in the same terminal, and the app exits when it does.
 
-## Playlists
+### Playlists
 
-The output is written to `<temp>/apple-event-<short-uuid>.m3u8` (a 22-character
-base57 UUID) and deleted when the player exits; any left behind by a run that
-was killed are cleared by the next run once they are a day old. With
-`--keep-playlist` it is written to your Downloads folder instead (the one set
-in Windows, `XDG_DOWNLOAD_DIR` on Linux, `~/Downloads` on macOS), or to the
-folder given after the flag, which is created if needed, and kept. The
-playlist contains one `EXT-X-STREAM-INF`, its audio rendition and, only
-if requested, its subtitles. I-frame playlists are dropped. For live events,
-Apple lists each variant on primary and backup endpoints; the first primary
-endpoint is used and backups (`-b` groups/hosts) are discarded.
+The playlist is deleted when the player closes. Leftovers from a killed run
+are cleaned up after a day.
 
-The stream is discovered through the `url-json` meta tag on
-apple.com/apple-events, which points at a JSON document whose `videoSrc.hls` is
-the master playlist for both live and replay.
+`--keep-playlist` keeps it in your Downloads folder, or in the folder you give
+(created if missing).
 
-## Installing
+## Troubleshooting
 
-Download the archive for your platform from
-[Releases](https://github.com/Mahir007/apple-event-streamer/releases), extract
-it and put `apple-event-streamer` somewhere on your `PATH`. Each archive holds
-the executable, `LICENSE` and `THIRD_PARTY_LICENSES` (the notices of the
-open-source libraries and Go standard library built into it), and has a matching `<archive>.sha256` checksum
-(verify with `sha256sum -c <archive>.sha256`, or `shasum -a 256 -c` on macOS).
+### "mpv was not found on PATH"
 
-| Platform | Archive | Requires |
-| --- | --- | --- |
-| Windows x64 / arm64 | `…_windows-amd64.zip`, `…_windows-arm64.zip` | Windows 10+ |
-| macOS (Intel + Apple silicon) | `…_darwin-universal.tar.xz` | macOS 12 Monterey+ |
-| Linux x64 / arm64 | `…_linux-amd64.tar.xz`, `…_linux-arm64.tar.xz` | any (static binary) |
+Install mpv (`brew install mpv` on macOS), or mpv.net on Windows, or pass
+`--mpv PATH`.
 
-On macOS the binary is ad-hoc signed but not notarized, so a copy downloaded
-with a browser is quarantined by Gatekeeper. Clear that with
-`xattr -d com.apple.quarantine apple-event-streamer` (or download with `curl`).
+### macOS won't open the app
+
+The app isn't notarized, so macOS blocks copies downloaded with a browser. Run
+`xattr -d com.apple.quarantine apple-event-streamer`, or download with `curl`.
+
+### "the events page has no stream right now"
+
+The stream only appears shortly before the event starts.
+
+### No subtitles
+
+Subtitles are off by default. With `--all-subs` none is selected; press `j` in
+mpv.
+
+### Other problems
+
+Run with `--verbose` and include the output in an
+[issue](https://github.com/Mahir007/apple-event-streamer/issues).
 
 ## Building
 
-Requires Go 1.26+. The Go version sets the oldest supported macOS: releases
-are built with the Go version pinned in `.go-version` (1.26.10), which targets
-macOS 12 Monterey; building with Go 1.27 or later raises that to macOS 13
-Ventura. To reproduce a release build with a newer local Go, let it fetch the
-pinned toolchain:
-
-```sh
-GOTOOLCHAIN=go$(cat .go-version) make package
-```
-
-```sh
-make build     # current platform
-make dist      # all targets into dist/ (macOS as a universal2 binary)
-make package   # dist + archives and .sha256 files (needs xz, zip, advzip)
-make test
-make race      # tests under the race detector (needs cgo)
-make lint      # staticcheck and govulncheck for Linux, Windows and macOS
-```
-
-Binaries are built with `CGO_ENABLED=0 -trimpath -ldflags "-s -w"`: static,
-with the symbol table and DWARF debug info stripped. Archives use maximum
-compression: `xz -9e` for `.tar.xz`, and for Windows a standard `.zip`
-recompressed with zopfli (`advzip -z -4`, about 4% smaller than `zip -9`).
-
-Executables are deliberately not UPX-packed. UPX can't pack Windows arm64 or
-macOS binaries (and would break the arm64 code signature), the packed files
-download no smaller than the xz archives, it decompresses the whole program in
-memory on every launch, and packed Windows executables are often flagged by
-antivirus software.
-
-The universal2 binary is assembled by `tools/macuniversal`, a small Go
-equivalent of `lipo -create`, so it can be built on any OS.
-`tools/thirdparty` generates `THIRD_PARTY_LICENSES` from the modules
-`go list -deps` reports for every target, so it always matches what is linked.
-`tools/winres` writes the Windows version resource (the description Task
-Manager shows, plus version and copyright) as a `.syso` the linker embeds.
-
-## CI and releases
-
-Every push and pull request runs `.github/workflows/ci.yml`, which vets,
-tests (also under the race detector), lints and packages every target and attaches the archives to the workflow run as an
-artifact. It never publishes anything.
-
-Both workflows share `.github/actions/setup`, which restores the newest Go
-module and build/test cache (falling back across commits and `go.sum`
-changes) and the packaging tools, so repeat runs only recompile what changed.
-Only successful pushes to `main` save the Go cache; branches, pull requests
-and tags reuse it. Compression can't be cached since every build
-differs, so the archives are compressed in parallel instead.
-
-Pushing a tag that starts with `v` runs `.github/workflows/release.yml`,
-which uses the pinned Go toolchain to test, build and package every
-target and publishes a GitHub release
-with the archives and their `.sha256` files. Tags containing a `-` (e.g. `v1.1.0-rc.1`)
-are marked as pre-releases.
-
-```sh
-git tag v1.0.0
-git push origin v1.0.0
-```
+See [docs/building.md](docs/building.md) for building, CI and releases.
