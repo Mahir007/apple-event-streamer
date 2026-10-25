@@ -24,7 +24,7 @@ jobs:
       - uses: ./.github/actions/setup
 
       - name: Test
-        run: make vet test
+        run: make vet test race lint
 
       - name: Build packages
         run: make package VERSION="$GITHUB_REF_NAME"

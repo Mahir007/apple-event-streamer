@@ -15,7 +15,12 @@ WINRES := go run ./tools/winres -name $(BINARY) -version '$(VERSION)' \
 gobuild = if [ $(1) = windows ]; then $(WINRES) -arch $(2) -o rsrc_windows_$(2).syso || exit 1; fi; \
 	GOOS=$(1) GOARCH=$(2) $(BUILD) -o $(3) .; st=$$?; rm -f rsrc_windows_$(2).syso; [ $$st = 0 ]
 
-.PHONY: build dist package test vet clean
+# Pinned analysis tools, installed into .bin so GOOS/GOARCH below choose
+# what is analysed rather than how the tools are built.
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
+
+.PHONY: build dist package test race vet lint clean
 
 build:
 	@$(call gobuild,$$(go env GOOS),$$(go env GOARCH),$(BINARY)$$(go env GOEXE))
@@ -69,10 +74,25 @@ package: dist
 test:
 	go test ./...
 
+# The race detector needs cgo.
+race:
+	CGO_ENABLED=1 go test -race ./...
+
 vet:
 	@for t in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do \
 		GOOS=$${t%/*} GOARCH=$${t#*/} go vet ./... || exit 1; \
 	done
 
+# staticcheck and govulncheck per OS: each sees only that OS's files, and
+# govulncheck only reports vulnerabilities in code that is reachable there.
+lint:
+	@GOBIN=$(CURDIR)/.bin go install $(STATICCHECK) && \
+	GOBIN=$(CURDIR)/.bin go install $(GOVULNCHECK) && \
+	for os in linux windows darwin; do \
+		echo "  $$os"; \
+		GOOS=$$os GOARCH=amd64 .bin/staticcheck ./... || exit 1; \
+		GOOS=$$os GOARCH=amd64 .bin/govulncheck ./... || exit 1; \
+	done
+
 clean:
-	rm -rf dist $(BINARY) $(BINARY).exe rsrc_windows_*.syso
+	rm -rf dist .bin $(BINARY) $(BINARY).exe rsrc_windows_*.syso
