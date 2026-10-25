@@ -6,6 +6,7 @@ package shortid
 import (
 	"crypto/rand"
 	"math/big"
+	"strings"
 )
 
 const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -20,6 +21,11 @@ func New() string {
 	u[6] = u[6]&0x0f | 0x40 // version 4
 	u[8] = u[8]&0x3f | 0x80 // RFC 4122 variant
 	return Encode(u)
+}
+
+// Valid reports whether s has the length and alphabet of an ID from New.
+func Valid(s string) bool {
+	return len(s) == Length && strings.Trim(s, alphabet) == ""
 }
 
 // Encode encodes a 128-bit UUID, least significant digit last, padded to

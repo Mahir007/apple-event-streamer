@@ -34,3 +34,14 @@ func TestEncodeMax(t *testing.T) {
 		t.Fatalf("zero UUID = %q", got)
 	}
 }
+
+func TestValid(t *testing.T) {
+	if id := New(); !Valid(id) {
+		t.Errorf("Valid(%q) = false", id)
+	}
+	for _, s := range []string{"", "abc", New() + "x", New()[:21], "0000000000000000000000", "abcdefghijk/mnopqrstuv", "../../../../etc/passwdx"} {
+		if Valid(s) {
+			t.Errorf("Valid(%q) = true", s)
+		}
+	}
+}
