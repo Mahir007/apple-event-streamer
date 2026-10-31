@@ -1,8 +1,18 @@
 name: Set up build
 description: >-
-  Installs the Go version pinned in .go-version, restores the Go module and
-  build/test caches, and installs the archive tools used by `make package`
-  (cached as .debs so later runs skip apt-get update).
+  Installs the Go version pinned in .go-version and restores the Go module and
+  build/test caches. With packaging, also installs the archive tools used by
+  `make package` (cached as .debs so later runs skip apt-get update).
+
+inputs:
+  cache-name:
+    description: >-
+      Names the job's Go caches. Each job builds different things, so each
+      keeps its own.
+    required: true
+  packaging:
+    description: '"true" to install the archive tools for `make package`.'
+    default: 'false'
 
 outputs:
   go-cache-paths:
@@ -32,9 +42,12 @@ runs:
     - name: Locate Go caches
       id: go-env
       shell: bash
+      env:
+        NAME: ${{ inputs.cache-name }}
       run: |
-        prefix="go-${ImageOS:-unknown}-$(uname -m)-$(go env GOVERSION)"
-        deps="$prefix-$(sha256sum go.sum | cut -c1-16)"
+        prefix="go-$NAME-${ImageOS:-unknown}-$(uname -m)-$(go env GOVERSION)"
+        sum=$(sha256sum go.sum 2>/dev/null || shasum -a 256 go.sum)
+        deps="$prefix-${sum:0:16}"
         {
           echo "prefix=$prefix"
           echo "deps=$deps"
@@ -49,7 +62,7 @@ runs:
     # Restore the newest cache: same commit, else same go.sum, else any
     # cache for this Go version. Go only rebuilds what changed and trims
     # entries unused for a few days by itself. Saving is done by the
-    # workflow after a successful build on main (see ci.yml).
+    # workflow after a successful run on main (see ci.yml).
     - name: Restore Go caches
       id: go-cache
       uses: actions/cache/restore@v6
@@ -61,12 +74,14 @@ runs:
           ${{ steps.go-env.outputs.prefix }}-
 
     - name: Identify runner image
+      if: inputs.packaging == 'true'
       id: image
       shell: bash
       run: echo "id=${ImageOS:-unknown}-$(uname -m)" >> "$GITHUB_OUTPUT"
 
     # zip and xz ship with the runner image; advzip (zopfli) does not.
     - name: Restore packaging tools
+      if: inputs.packaging == 'true'
       id: debs
       uses: actions/cache@v6
       with:
@@ -74,6 +89,7 @@ runs:
         key: packaging-debs-${{ steps.image.outputs.id }}-advancecomp-v1
 
     - name: Install packaging tools
+      if: inputs.packaging == 'true'
       shell: bash
       env:
         CACHE_HIT: ${{ steps.debs.outputs.cache-hit }}

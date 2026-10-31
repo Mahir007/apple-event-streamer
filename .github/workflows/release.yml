@@ -2,53 +2,92 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ['v*']
 
 permissions:
-  contents: write
-
-env:
-  # .go-version pins the Go release used for every build. It also sets the
-  # oldest supported macOS: Go 1.26 is the last release that targets
-  # macOS 12 Monterey (Go 1.27 requires 13). Never switch automatically.
-  GOTOOLCHAIN: local
+  contents: read
 
 jobs:
-  release:
+  version:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        run: |
+          if [[ ! $GITHUB_REF_NAME =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::$GITHUB_REF_NAME isn't a version tag, such as v1.0.0 or v1.0.0-rc.1"
+            exit 1
+          fi
+          echo "version=${GITHUB_REF_NAME#v}" >>"$GITHUB_OUTPUT"
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  release:
+    needs: [version, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      # To delete the artifact once the release has its files.
+      actions: write
+      # To attest the archives.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          # Release notes need the history and tags back to the last release.
+          # The notes list the commits since the previous release's tag.
           fetch-depth: 0
-
       # actions/checkout replaces the pushed annotated tag with a lightweight
       # one, which loses the tag message used in the release notes.
       - name: Fetch tags
         run: git fetch --force --tags origin
-
-      - uses: ./.github/actions/setup
-
-      - name: Test
-        run: make vet test race lint
-
-      - name: Build packages
-        run: make package VERSION="$GITHUB_REF_NAME"
-
-      - name: Publish release
+      - uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist
+      - name: Write the release notes
+        run: |
+          .github/release-notes.sh "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" >"$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >>"$GITHUB_STEP_SUMMARY"
+      # Attestations need a public repository on GitHub's free plans.
+      - name: Attest
+        if: ${{ !github.event.repository.private }}
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            dist/*.tar.xz
+            dist/*.zip
+      # A version with a hyphen, such as 1.0.0-rc.1, is a pre-release.
+      # Re-running the job updates the release it created.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          files=(dist/*.tar.xz dist/*.zip dist/*.sha256)
+          flags=()
+          if [[ $VERSION == *-* ]]; then
+            flags=(--prerelease)
+          fi
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+            gh release edit "$GITHUB_REF_NAME" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
+          else
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
+              --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag "${flags[@]}"
+          fi
+      - name: Delete the artifact
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          files=(dist/*.tar.xz dist/*.zip dist/*.sha256)
-          .github/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
-            gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
-          else
-            flags=()
-            # Tags like v1.2.0-rc.1 become pre-releases.
-            [[ "$GITHUB_REF_NAME" == *-* ]] && flags+=(--prerelease)
-            gh release create "$GITHUB_REF_NAME" "${files[@]}" \
-              --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag "${flags[@]}"
-          fi
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name == "release") | .id' |
+            xargs -r -I{} gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/{}"
