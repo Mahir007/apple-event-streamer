@@ -1,4 +1,4 @@
-# Building and releasing
+# Contributing
 
 ## Building
 
@@ -67,21 +67,29 @@ already open and exit early.
 
 ## CI
 
-Every push and pull request runs `.github/workflows/ci.yml`. It vets, tests
-(also with the race detector), lints and packages every target, and attaches
-the archives to the run. It doesn't publish anything.
+`.github/workflows/ci.yml` runs on every push to a branch:
 
-Both workflows use `.github/actions/setup`. It restores the newest Go module
-and build cache, falling back to older commits and `go.sum` versions, so
-repeat runs only rebuild what changed. Only successful pushes to `main` save
+- lint: `go vet` for every target, staticcheck, govulncheck and actionlint.
+- test: the tests on Ubuntu, macOS and Windows, and on Ubuntu also under the
+  race detector.
+- build: every target's archive, with the pinned Go version. It runs the Linux
+  binary, and keeps the archives for a day as the run's `release` artifact.
+  On a branch the version is `v0.0.0-dev+<commit>`.
+- check: extracts the macOS and Windows archives on those systems and runs the
+  binary. On macOS it runs both halves of the universal2 binary, x86_64
+  through Rosetta, and fails if the runner has no Rosetta.
+
+The jobs use `.github/actions/setup`. It restores the newest Go module and
+build cache for the job, falling back to older commits and `go.sum` versions,
+so repeat runs only rebuild what changed. Only successful pushes to `main` save
 the cache. Archives are compressed in parallel (they can't be cached).
 
 ## Releases
 
 Pushing a tag that starts with `v` runs `.github/workflows/release.yml`. It
-tests, builds and packages every target with the pinned Go version, then
-publishes a GitHub release with the archives and `.sha256` files. Tags with a
-`-` (such as `v1.1.0-rc.1`) are marked as pre-releases.
+runs CI with the tag's version, then publishes a GitHub release with CI's
+archives, their `.sha256` files and an attestation of where they were built.
+Tags with a `-` (such as `v1.1.0-rc.1`) are marked as pre-releases.
 
 ```sh
 git tag v1.0.0
