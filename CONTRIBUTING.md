@@ -1,4 +1,4 @@
-# Building and releasing
+# Contributing
 
 ## Building
 

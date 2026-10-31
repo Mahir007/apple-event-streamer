@@ -138,4 +138,4 @@ Run with `--verbose` and include the output in an
 
 ## Building
 
-See [docs/building.md](docs/building.md) for building, CI and releases.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for building, CI and releases.
