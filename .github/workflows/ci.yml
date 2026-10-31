@@ -1,13 +1,22 @@
 name: CI
 
-# Tests and builds every push and pull request. Packages are kept as a
-# workflow artifact; nothing is published (releases come from tags, see
-# release.yml).
 on:
   push:
-    branches: ["**"]
-  pull_request:
+    branches: ['**']
+    paths-ignore: ['**.md', LICENSE]
   workflow_dispatch:
+  # release.yml runs this to test and build a tagged version.
+  workflow_call:
+    inputs:
+      version:
+        description: The version to put in the build, such as 1.0.0
+        type: string
+        required: true
+
+# A newer push to the same branch cancels the run for the older one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_call' && !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
@@ -19,24 +28,105 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
-  build:
+  lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
       - uses: ./.github/actions/setup
         id: setup
+        with:
+          cache-name: lint
+      - run: make vet lint
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+      # Only main saves Go caches; branches and tags restore main's, which
+      # keeps the cache storage from filling with duplicates.
+      - name: Save Go caches
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.setup.outputs.go-cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.setup.outputs.go-cache-paths }}
+          key: ${{ steps.setup.outputs.go-cache-key }}
 
-      - name: Test
-        run: make vet test race lint
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+        with:
+          cache-name: test
+      - run: go test ./...
+      # The race detector needs cgo, which the Linux runner has set up.
+      - if: runner.os == 'Linux'
+        run: make race
+      - name: Save Go caches
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.setup.outputs.go-cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.setup.outputs.go-cache-paths }}
+          key: ${{ steps.setup.outputs.go-cache-key }}
 
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        id: setup
+        with:
+          cache-name: build
+          packaging: 'true'
+
+      # The archive names and --version keep the tag's v, such as v1.0.0.
       - name: Build packages
-        run: make package VERSION="ci-${GITHUB_SHA::7}"
+        id: package
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          version=v${VERSION:-0.0.0-dev+${GITHUB_SHA::7}}
+          make package VERSION="$version"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
 
-      # Only main saves Go caches; branches, pull requests and tags restore
-      # main's, which keeps the cache storage from filling with duplicates.
+      - name: Check the Linux archive
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          tar -xf "dist/apple-event-streamer_${VERSION}_linux-amd64.tar.xz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/apple-event-streamer_${VERSION}_linux-amd64"
+          ls -l
+          ./apple-event-streamer --version | tee "$RUNNER_TEMP/version.txt"
+          grep -qxF "apple-event-streamer $VERSION (linux/amd64)" "$RUNNER_TEMP/version.txt"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          {
+            echo "### apple-event-streamer $VERSION"
+            echo
+            echo "| Archive | Size | SHA-256 |"
+            echo "| --- | --- | --- |"
+            for archive in dist/*.tar.xz dist/*.zip; do
+              echo "| $(basename "$archive") | $(stat -c %s "$archive") bytes | \`$(cut -d' ' -f1 "$archive.sha256")\` |"
+            done
+          } >>"$GITHUB_STEP_SUMMARY"
+
       - name: Save Go caches
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.setup.outputs.go-cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -46,6 +136,59 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: apple-event-streamer-${{ github.sha }}
+          name: release
           path: dist/
+          retention-days: 1
           if-no-files-found: error
+
+  # The checks a user's computer would make: its own tools extract the
+  # archive, and the binary starts and says its version. On macOS, both
+  # halves of the universal2 binary run, x86_64 through Rosetta.
+  check:
+    name: check (${{ matrix.os }})
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist
+      - name: Check the macOS archive
+        if: runner.os == 'macOS'
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          dir=apple-event-streamer_${VERSION}_darwin-universal
+          tar -xf "dist/$dir.tar.xz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/$dir"
+          ls -l
+          lipo -archs apple-event-streamer
+          ./apple-event-streamer --version | tee version.txt
+          grep -qxF "apple-event-streamer $VERSION (darwin/arm64)" version.txt
+          if ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "::error::Rosetta isn't installed on this runner, so the x86_64 half can't be run. Pin the job to the last macOS runner with Rosetta."
+            exit 1
+          fi
+          arch -x86_64 ./apple-event-streamer --version | tee version.txt
+          grep -qxF "apple-event-streamer $VERSION (darwin/amd64)" version.txt
+      - name: Check the Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          $dir = "apple-event-streamer_$($env:VERSION)_windows-amd64"
+          Expand-Archive "dist/$dir.zip" $env:RUNNER_TEMP
+          Set-Location (Join-Path $env:RUNNER_TEMP $dir)
+          Get-ChildItem
+          $got = ./apple-event-streamer.exe --version
+          Write-Output $got
+          if ($got -ne "apple-event-streamer $($env:VERSION) (windows/amd64)") {
+            Write-Output "::error::The binary says '$got'"
+            exit 1
+          }
