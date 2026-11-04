@@ -131,6 +131,10 @@ you ask for one.
 Install mpv (`brew install mpv` on macOS), or mpv.net on Windows, or pass
 `--mpv PATH`.
 
+### "tar: xz: Cannot exec"
+
+Not every build of Termux comes with xz. Run `pkg install xz-utils`.
+
 ### "the mpv app isn't installed"
 
 Install the [mpv app](https://github.com/mpv-android/mpv-android), or pass

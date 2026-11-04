@@ -164,7 +164,7 @@ run_t basics 60
 cat "$out/r.basics.txt"
 expect "$out/r.basics.txt" 'Seccomp:[[:space:]]+[0-9]' "basics: ran in a Termux session"
 
-run_t install 60
+run_t install 240
 refuse "$out/r.install.txt" '\[exit [1-9]' "install: extracted and copied with Termux's tools"
 
 run_t version 30

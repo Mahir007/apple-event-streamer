@@ -21,6 +21,8 @@ basics)
 	echo "API $(getprop ro.build.version.sdk), $(grep Seccomp: /proc/self/status)"
 	;;
 install)
+	# Not every build of Termux comes with xz. The README says to do this.
+	command -v xz >/dev/null || run pkg install -y xz-utils
 	run tar -xf archive.tar.xz
 	run cp apple-event-streamer_v0.0.0-probe_android-amd64/apple-event-streamer "$PREFIX/bin/"
 	;;
