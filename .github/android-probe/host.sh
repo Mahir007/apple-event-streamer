@@ -10,7 +10,10 @@ here=$(dirname "$0")
 mkdir -p "$out"
 home=files/home
 
-tx() { adb shell "run-as com.termux sh -c '$1'"; }
+# Android 6's adb doesn't pass exit codes or binary-safe output, so this strips
+# carriage returns and tx_ok asks the device to say whether a test passed.
+tx() { adb shell "run-as com.termux sh -c '$1'" | tr -d '\r'; }
+tx_ok() { [ "$(tx "$1 && echo yes")" = yes ]; }
 shot() { adb exec-out screencap -p >"$out/$1.png"; }
 type_line() {
 	adb shell input text "${1// /%s}"
@@ -41,7 +44,7 @@ run_t() {
 		tx "rm -f $home/done.$name"
 		type_line "sh t.sh $name"
 		for ((i = 0; i < limit; i++)); do
-			if tx "test -e $home/done.$name"; then
+			if tx_ok "test -e $home/done.$name"; then
 				tx "cat $home/r.$name.txt" >"$out/r.$name.txt"
 				return 0
 			fi
@@ -82,11 +85,11 @@ adb shell wm dismiss-keyguard
 adb shell svc power stayon true
 
 adb install -g "$apks/termux.apk" 2>&1 | tee "$out/install-termux.txt"
-adb install -g "$apks/mpv.apk" 2>&1 | tee "$out/install-mpv.txt"
+adb install "$apks/mpv.apk" 2>&1 | tee "$out/install-mpv.txt"
 
 termux_front
 for ((i = 0; i < 240; i++)); do
-	tx "test -x files/usr/bin/bash && test -x files/usr/bin/am" && break
+	tx_ok "test -e files/usr/bin/bash" && break
 	[ $((i % 30)) = 29 ] && dismiss_dialogs
 	sleep 1
 done
@@ -95,10 +98,13 @@ sleep 10
 dismiss_dialogs
 shot termux-first
 
-adb push "$here/t.sh" /data/local/tmp/ >/dev/null
-adb push "$bin"/. /data/local/tmp/ >/dev/null
-adb shell chmod 755 '/data/local/tmp/*'
-tx "cp /data/local/tmp/t.sh /data/local/tmp/aes-* /data/local/tmp/serve $home/ && chmod 755 $home/aes-* $home/serve"
+# Named one by one: run-as can read /data/local/tmp but not list it.
+for f in "$here/t.sh" "$here/launch" "$bin"/*; do
+	name=$(basename "$f")
+	adb push "$f" "/data/local/tmp/$name" >/dev/null
+	adb shell chmod 755 "/data/local/tmp/$name"
+	tx "cp /data/local/tmp/$name $home/$name && chmod 755 $home/$name"
+done
 tx "ls -l $home/" | tee "$out/files.txt"
 
 run_t basics
@@ -106,6 +112,8 @@ run_t linux
 run_t android 240
 run_t playlists 90
 run_t serve 30
+run_t goexec 60
+run_t launcher 60
 shot termux-after-basics
 
 # Raw mouse bytes for each tracking mode, with two taps while it reads.
@@ -119,7 +127,7 @@ for mode in 1003 1002; do
 	sleep 1
 	adb shell input tap 400 700
 	for ((i = 0; i < 30; i++)); do
-		tx "test -e $home/done.mouse-$mode" && break
+		tx_ok "test -e $home/done.mouse-$mode" && break
 		sleep 1
 	done
 	tx "cat $home/r.mouse-$mode.txt" >"$out/r.mouse-$mode.txt"
@@ -135,15 +143,15 @@ for pick in pick-allmotion pick-cell; do
 	shot "$pick-before"
 	for _ in 1 2 3 4 5; do
 		for y in 150 250 350 450 550 650 750 850 950 1050; do
-			tx "test -e $home/done.$pick" && break 2
+			tx_ok "test -e $home/done.$pick" && break 2
 			adb shell input tap 300 "$y"
 			sleep 0.2
 		done
 	done
 	shot "$pick-after"
-	tx "test -e $home/done.$pick" || adb shell input text q
+	tx_ok "test -e $home/done.$pick" || adb shell input text q
 	for ((i = 0; i < 15; i++)); do
-		tx "test -e $home/done.$pick" && break
+		tx_ok "test -e $home/done.$pick" && break
 		sleep 1
 	done
 	tx "cat $home/r.$pick.txt" >"$out/r.$pick.txt"
@@ -155,6 +163,17 @@ run_t am-missing 30
 
 tx "cat $home/www/plain.m3u8" >"$out/plain.m3u8"
 adb push "$out/plain.m3u8" /sdcard/Download/plain.m3u8 >/dev/null
+
+# The mpv app as a fresh install: never opened, nothing granted.
+adb shell dumpsys package is.xyz.mpv | grep -E 'granted=' >"$out/permissions-fresh.txt"
+play_case http-fresh 30
+play_case file-sdcard-noperm 20
+
+# Then with its storage permissions, as if the user had granted them.
+for perm in READ_EXTERNAL_STORAGE WRITE_EXTERNAL_STORAGE READ_MEDIA_AUDIO READ_MEDIA_IMAGES READ_MEDIA_VIDEO; do
+	adb shell pm grant is.xyz.mpv "android.permission.$perm" 2>/dev/null
+done
+adb shell dumpsys package is.xyz.mpv | grep -E 'granted=' >"$out/permissions-granted.txt"
 
 play_case http 30
 play_case http-sysam 25
@@ -211,7 +230,7 @@ play_case subs-conf 25
 		echo "requests: $(wc -l <"$out/serve-$n.txt")"
 		cut -c1-140 "$out/serve-$n.txt" | head -6
 		cut -c1-160 "$out/session-$n.txt"
-		grep -E ' mpv *:| MPVActivity *:|is.xyz.mpv' "$f" | grep -E 'Video +--vid|Audio +--aid|Subs +--sid|whitelist|support the subtitle|Not detecting|Failed|failed to|unknown scheme|Permission denied|Exiting|No file given|Could not|Playing:' | sed -E 's/^[0-9-]+ [0-9:.]+ +[0-9]+ +[0-9]+ //' | cut -c1-170 | sort -u | head -14
+		grep -E ' mpv *:| MPVActivity *:|is.xyz.mpv' "$f" | grep -E 'Video +--vid|Audio +--aid|Subs +--sid|whitelist|support the subtitle|Not detecting|Failed to open|failed to|unknown scheme|Permission denied|No file given|Failed to recognize|finished playback' | sed -E 's/^[0-9-]+ [0-9:.]+ +[0-9]+ +[0-9]+ //' | cut -c1-170 | sort -u | head -14
 		echo '```'
 	done
 } >"$out/summary.md"

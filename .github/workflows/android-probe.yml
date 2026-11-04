@@ -15,7 +15,6 @@ permissions:
 env:
   GOTOOLCHAIN: local
   NDK_VERSION: 29.0.14206865
-  TERMUX_APK: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
   MPV_APK: https://github.com/mpv-android/mpv-android/releases/download/2026-09-17/app-default-x86_64-release.apk
 
 jobs:
@@ -39,15 +38,35 @@ jobs:
           if-no-files-found: error
 
   emulator:
-    name: emulator (API ${{ matrix.api }} ${{ matrix.target }})
+    name: emulator (${{ matrix.name }})
     needs: build
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { api: '30', target: google_apis }
-          - { api: '37.0', target: google_apis }
-          - { api: '37.0', target: google_apis_ps16k }
+          # mpv's minimum. Termux's stable builds need Android 7.
+          - name: android-6
+            api: '23'
+            target: google_apis
+            termux: https://github.com/termux/termux-app/releases/download/v0.119.0-beta.3/termux-app_v0.119.0-beta.3%2Bapt-android-5-github-debug_x86_64.apk
+          - name: android-11
+            api: '30'
+            target: google_apis
+            termux: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
+          - name: android-17
+            api: '37.0'
+            target: google_apis
+            termux: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
+          - name: android-17-16k
+            api: '37.0'
+            target: google_apis_ps16k
+            termux: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
+          # A debug build of what Google Play ships, which targets the latest
+          # SDK. The newest release with an APK attached.
+          - name: android-17-play
+            api: '37.0'
+            target: google_apis
+            termux: https://github.com/termux-play-store/termux-apps/releases/download/termux-app-googleplay.2026.02.11/termux-app-debug-googleplay.2026.02.11.apk
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -59,6 +78,8 @@ jobs:
           name: probe-bin
           path: probe-bin
       - name: Download the apps
+        env:
+          TERMUX_APK: ${{ matrix.termux }}
         run: |
           mkdir apks
           curl -fsSL -o apks/termux.apk "$TERMUX_APK"
@@ -86,7 +107,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: probe-api-${{ matrix.api }}-${{ matrix.target }}
+          name: probe-${{ matrix.name }}
           path: probe-out/
           retention-days: 5
 

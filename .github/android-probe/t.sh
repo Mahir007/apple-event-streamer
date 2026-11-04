@@ -56,6 +56,7 @@ android)
 	# Go's own DNS resolver, which is all a build without cgo has.
 	try env GODEBUG=netdns=go ./aes-android --list
 	try ./aes-android --mpv /system/bin/true --best --max-res 480
+	try ./aes-android --mpv "$PREFIX/bin/true" --best --max-res 480
 	try ./aes-android --best --max-res 480 --keep-playlist --no-launch
 	# Whether an arm64 binary runs here through translation.
 	try ./aes-android-arm64 --version
@@ -69,6 +70,22 @@ playlists)
 	cp "$p" www/subs.m3u8 && rm "$p"
 	try wc -c www/plain.m3u8 www/subs.m3u8
 	;;
+goexec)
+	# Starting things from Go: a raw execve, with no termux-exec to help.
+	try ./gx /system/bin/true
+	try ./gx "$PREFIX/bin/true"
+	try ./gx am --version
+	try ./gx /system/bin/sh -c 'exec am --version'
+	;;
+launcher)
+	mkdir -p inst/lib
+	cp aes-android inst/lib/apple-event-streamer-amd64
+	cp launch inst/apple-event-streamer
+	chmod 755 inst/lib/apple-event-streamer-amd64 inst/apple-event-streamer
+	try ./inst/apple-event-streamer --version
+	ln -sf "$HOME/inst/apple-event-streamer" "$PREFIX/bin/aes-launch"
+	try aes-launch --version
+	;;
 serve)
 	./serve www 18765 >>serve.log 2>&1 &
 	echo $! >serve.pid
@@ -78,7 +95,7 @@ mouse-1003 | mouse-1002)
 	mode=${name#mouse-}
 	stty raw -echo </dev/tty
 	printf '\033[?%sh\033[?1006h' "$mode" >/dev/tty
-	timeout 15 dd bs=1 count=64 of="bytes.$mode" </dev/tty 2>/dev/null
+	timeout --foreground 15 dd bs=1 count=64 of="bytes.$mode" </dev/tty 2>/dev/null
 	printf '\033[?%sl\033[?1006l' "$mode" >/dev/tty
 	stty sane </dev/tty
 	echo "bytes the terminal sent for taps in mode $mode:"
@@ -94,13 +111,13 @@ pick-allmotion | pick-cell)
 	"$b" --no-launch </dev/tty 2>/dev/tty
 	echo "[exit $?]"
 	;;
-play-http) play -t $H -n $M -d "$U/plain.m3u8" --es title "Apple Event · SDR" ;;
+play-http | play-http-fresh) play -t $H -n $M -d "$U/plain.m3u8" --es title "Apple Event · SDR" ;;
 play-http-sysam) AM=/system/bin/am play -t $H -n $M -d "$U/plain.m3u8" ;;
 play-http-nomime) play -n $M -d "$U/plain.m3u8" ;;
 play-http-nocomponent) play -t video/any -p is.xyz.mpv -d "$U/plain.m3u8" ;;
 play-data) play -n $M -d "data:$H;base64,$(base64 -w0 www/plain.m3u8)" ;;
 play-file-private) play -t $H -n $M -d "file://$HOME/www/plain.m3u8" ;;
-play-file-sdcard) play -t $H -n $M -d "file:///sdcard/Download/plain.m3u8" ;;
+play-file-sdcard | play-file-sdcard-noperm) play -t $H -n $M -d "file:///sdcard/Download/plain.m3u8" ;;
 play-content) play -t $H -n $M -d "content://com.termux.files$HOME/www/plain.m3u8" --grant-read-uri-permission ;;
 play-subs | play-subs-conf) play -t $H -n $M -d "$U/subs.m3u8" ;;
 am-missing)

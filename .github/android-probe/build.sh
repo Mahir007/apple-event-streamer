@@ -5,8 +5,8 @@ set -euo pipefail
 out=$(realpath -m "$1")
 mkdir -p "$out"
 bin=$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin
-amd64_cc=$bin/x86_64-linux-android24-clang
-arm64_cc=$bin/aarch64-linux-android24-clang
+amd64_cc=$bin/x86_64-linux-android23-clang
+arm64_cc=$bin/aarch64-linux-android23-clang
 flags=(-trimpath -tags nethttpomithttp2 -ldflags '-s -w -X main.version=v0.0.0-probe')
 
 # What releases ship for Linux today.
@@ -22,5 +22,6 @@ GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC=$amd64_cc go build "${flags[@]}" -o "
 git checkout -- internal/picker/picker.go
 
 GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC=$amd64_cc go build -trimpath -o "$out/serve" .github/android-probe/serve/main.go
+GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC=$amd64_cc go build -trimpath -o "$out/gx" .github/android-probe/gx/main.go
 
 ls -l "$out"
