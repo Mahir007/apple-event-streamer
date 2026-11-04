@@ -1,6 +1,7 @@
 // Command thirdparty writes the licence notices of everything linked into
 // the release binaries: every non-main module compiled into any target
-// (found with `go list -deps`) plus the Go standard library.
+// (found with `go list -deps`) plus the Go standard library and the Android
+// NDK's C startup code.
 //
 //	go run ./tools/thirdparty -o THIRD_PARTY_LICENSES
 package main
@@ -21,14 +22,46 @@ import (
 
 // targets must cover every platform a release binary is built for, since
 // some modules (e.g. x/sys/windows, termios) are only linked on some.
-var targets = []string{"linux/amd64", "linux/arm64", "windows/amd64", "windows/arm64", "darwin/amd64", "darwin/arm64"}
+// android/amd64 links the same modules as android/arm64, but go list can't
+// load it without cgo.
+var targets = []string{"linux/amd64", "linux/arm64", "android/arm64", "windows/amd64", "windows/arm64", "darwin/amd64", "darwin/arm64"}
 
 var licenseFile = regexp.MustCompile(`(?i)^(LICEN[CS]E|COPYING|NOTICE|PATENTS)([.-].*)?$`)
 
 type module struct {
 	path, version, dir string
 	files              []string
+	text               string // the notice itself, for code that isn't a module
 }
+
+// ndkStartup is the notice for crtbegin_dynamic.o and crtend_android.o, which
+// the NDK links into Android binaries. Its other static code, compiler-rt and
+// libunwind, is under the LLVM exception, which needs no notice in binaries.
+var ndkStartup = &module{path: "Android NDK C startup code", version: "r29", text: `Copyright (C) 2008 The Android Open Source Project
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions
+are met:
+ * Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+ * Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in
+   the documentation and/or other materials provided with the
+   distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
+BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
+OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
+AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
+OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+SUCH DAMAGE.`}
 
 func main() {
 	out := flag.String("o", "THIRD_PARTY_LICENSES", "output file")
@@ -70,7 +103,7 @@ func run(out, pkg string) error {
 		std.version = strings.TrimSpace(string(v))
 	}
 
-	list := []*module{std}
+	list := []*module{std, ndkStartup}
 	var paths []string
 	for p := range mods {
 		paths = append(paths, p)
@@ -81,6 +114,9 @@ func run(out, pkg string) error {
 	}
 
 	for _, m := range list {
+		if m.text != "" {
+			continue
+		}
 		entries, err := os.ReadDir(m.dir)
 		if err != nil {
 			return fmt.Errorf("%s: %w", m.path, err)
@@ -108,6 +144,9 @@ func run(out, pkg string) error {
 		fmt.Fprintf(&b, "  %-*s  %-*s  %s\n", pw, m.path, vw, m.version, kind(m))
 	}
 	for _, m := range list {
+		if m.text != "" {
+			fmt.Fprintf(&b, "\n%s\n%s %s\n%s\n\n%s\n", strings.Repeat("=", 78), m.path, m.version, strings.Repeat("=", 78), m.text)
+		}
 		for _, f := range m.files {
 			text, err := os.ReadFile(filepath.Join(m.dir, f))
 			if err != nil {
@@ -122,7 +161,7 @@ func run(out, pkg string) error {
 
 // kind is a best-effort SPDX identifier for the summary table.
 func kind(m *module) string {
-	var all string
+	all := m.text
 	for _, f := range m.files {
 		b, _ := os.ReadFile(filepath.Join(m.dir, f))
 		all += string(b)

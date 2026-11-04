@@ -9,11 +9,11 @@ Ventura.
 
 ```sh
 make build     # current platform
-make dist      # all targets into dist/ (macOS as a universal2 binary)
+make dist      # all targets into dist/ (macOS as a universal2 binary; needs the NDK)
 make package   # dist plus archives and .sha256 files (needs xz, zip, advzip)
 make test
 make race      # tests under the race detector (needs cgo)
-make lint      # staticcheck and govulncheck for Linux, Windows and macOS
+make lint      # staticcheck and govulncheck for Linux, Android, Windows and macOS
 ```
 
 To build a release with a newer local Go, let Go fetch the pinned version:
@@ -26,6 +26,17 @@ Binaries are built with `CGO_ENABLED=0 -trimpath -tags nethttpomithttp2
 -ldflags "-s -w"`. The tag leaves out HTTP/2, which saves about 400 KB: the
 app only fetches three small files, and mpv does the streaming.
 
+Android is the exception, and needs cgo: Go's own DNS resolver doesn't work on
+Android, and `android/amd64` can't link without cgo. The static Linux binaries
+aren't an alternative. They can't look up hosts either, crash on Android 11 in
+`exec.LookPath`, and won't start at all in Termux from Google Play.
+
+Android builds use the NDK version in `.ndk-version`, from `$ANDROID_NDK` or
+`$ANDROID_HOME/ndk/`, and target API 23 (Android 6), the oldest version the mpv
+app runs on. The binaries are aligned for 16 KB pages. `make vet` and `make
+lint` only check `android/arm64`, because `android/amd64` won't type-check
+without cgo.
+
 ## Archives
 
 `.tar.xz` archives use `xz -9e`. Windows `.zip` files are recompressed with
@@ -36,10 +47,12 @@ and trips antivirus.
 
 ## Tools
 
+- `tools/androidelf` clears `DF_1_PIE` in the Android binaries. Android 6's
+  linker doesn't know the flag and prints a warning for it on every run.
 - `tools/macuniversal` joins the two macOS binaries into one universal2
   binary. It's a Go `lipo -create`, so it builds anywhere.
 - `tools/thirdparty` writes `THIRD_PARTY_LICENSES` from the modules that
-  `go list -deps` reports for each target.
+  `go list -deps` reports for each target, plus the NDK's C startup code.
 - `tools/winres` writes the Windows version resource (the description shown in
   Task Manager, the version and the copyright) as a `.syso` file that the
   linker embeds.
@@ -65,6 +78,22 @@ demuxer ignores subtitle tracks without it. mpv.net is started with
 `--process-instance=multi`, so it can't pass the file to a window that's
 already open and exit early.
 
+On Android the default player is the mpv app, which works differently:
+
+- It runs apart from the terminal, and Android has no way to wait for it to
+  close or read its exit code. So the app serves the playlist on `127.0.0.1`,
+  starts mpv with an intent through Termux's `am`, and exits five seconds after
+  mpv last fetched the playlist.
+- It gets the playlist over HTTP because Termux's temporary folder is private
+  and shared storage needs a permission in both apps.
+- An intent can't carry mpv options, so the two above can't be passed. The
+  app's FFmpeg needs neither when the playlist comes over HTTP.
+- `am`, and any player given with `--mpv`, run through `/system/bin/sh`. Termux
+  from Google Play can only run its programs with `termux-exec`, an `LD_PRELOAD`
+  library the shell loads and Go's `execve` bypasses. `/system/bin/am` itself
+  is refused from an app.
+- The picker asks for mouse mode 1002 instead of 1003, which Termux ignores.
+
 ## CI
 
 `.github/workflows/ci.yml` runs on every push to a branch:
@@ -78,6 +107,10 @@ already open and exit early.
 - check: extracts the macOS and Windows archives on those systems and runs the
   binary. On macOS it runs both halves of the universal2 binary, x86_64
   through Rosetta, and fails if the runner has no Rosetta.
+- check (android): extracts the Android archives and runs the binary in
+  `termux-docker`, which has Android's libc and linker with Termux's tools. It
+  has neither Android's seccomp filter nor its apps, so playback needs a real
+  device or an emulator.
 
 The jobs use `.github/actions/setup`. It restores the newest Go module and
 build cache for the job, falling back to older commits and `go.sum` versions,

@@ -1,4 +1,5 @@
-// Package player locates mpv / mpv.net and hands the terminal over to it.
+// Package player locates mpv / mpv.net and hands the terminal over to it, or
+// on Android opens the stream in the mpv app.
 package player
 
 import (
@@ -28,24 +29,33 @@ type Kind int
 const (
 	MPV Kind = iota
 	MPVNet
+	MPVApp // the mpv app on Android, which runs apart from this terminal
 )
 
 func (k Kind) String() string {
-	if k == MPVNet {
+	switch k {
+	case MPVNet:
 		return "mpvnet"
+	case MPVApp:
+		return "mpv app"
 	}
 	return "mpv"
 }
 
-// Player is a resolved player executable.
+// Player is a resolved player executable. For MPVApp, Path is am, which starts
+// the app.
 type Player struct {
 	Kind Kind
 	Path string
 }
 
+// android is a variable so that tests can act as Android on other systems.
+var android = runtime.GOOS == "android"
+
 // Find resolves the player. Explicit paths win; with both given, mpvnet is
-// used on Windows and mpv elsewhere. Otherwise Windows prefers mpvnet on
-// PATH and falls back to mpv; other systems use mpv.
+// used on Windows and mpv elsewhere. Otherwise Android uses the mpv app,
+// Windows prefers mpvnet on PATH and falls back to mpv, and other systems use
+// mpv.
 func Find(mpvPath, mpvnetPath string) (*Player, error) {
 	windows := runtime.GOOS == "windows"
 	switch {
@@ -55,6 +65,9 @@ func Find(mpvPath, mpvnetPath string) (*Player, error) {
 		return explicit(MPV, mpvPath)
 	}
 
+	if android {
+		return &Player{Kind: MPVApp, Path: "am"}, nil
+	}
 	if windows {
 		if p := lookup("mpvnet", mpvnetLocations()); p != "" {
 			return &Player{Kind: MPVNet, Path: p}, nil
@@ -159,6 +172,20 @@ func (p *Player) Args(playlist string, o Options) []string {
 	return append(args, playlist)
 }
 
+// systemShell is the shell Android itself provides.
+var systemShell = "/system/bin/sh"
+
+// command returns the command that starts path. On Android it goes through the
+// system shell: Termux from Google Play can't run its own programs directly,
+// only with its LD_PRELOAD library termux-exec, which the shell loads and Go's
+// execve bypasses.
+func command(path string, args ...string) *exec.Cmd {
+	if android {
+		return exec.Command(systemShell, append([]string{"-c", `exec "$0" "$@"`, path}, args...)...)
+	}
+	return exec.Command(path, args...)
+}
+
 // Run starts the player attached to this terminal and waits for it, so the
 // shell sees a single command lasting until the player quits. cleanup runs
 // after the player exits. The player's exit code is returned.
@@ -168,7 +195,7 @@ func (p *Player) Args(playlist string, o Options) []string {
 // killed, which covers GUI players such as mpv.net.
 func (p *Player) Run(args []string, cleanup func()) (int, error) {
 	defer cleanup()
-	cmd := exec.Command(p.Path, args...)
+	cmd := command(p.Path, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 
 	sigs := make(chan os.Signal, 1)

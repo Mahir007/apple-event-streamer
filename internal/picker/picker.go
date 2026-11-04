@@ -650,6 +650,11 @@ func (m *model) View() tea.View {
 	v := tea.NewView(strings.Join(lines, "\n"))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeAllMotion
+	if runtime.GOOS == "android" {
+		// Termux ignores any-motion tracking (mode 1003), so taps would do
+		// nothing. Touch screens have no hover to track anyway.
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	v.WindowTitle = "Apple Event Streamer"
 	return v
 }

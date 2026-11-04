@@ -2,7 +2,8 @@ name: Set up build
 description: >-
   Installs the Go version pinned in .go-version and restores the Go module and
   build/test caches. With packaging, also installs the archive tools used by
-  `make package` (cached as .debs so later runs skip apt-get update).
+  `make package` (cached as .debs so later runs skip apt-get update) and finds
+  the NDK pinned in .ndk-version.
 
 inputs:
   cache-name:
@@ -101,3 +102,15 @@ runs:
         fi
         sudo dpkg -i "$dir"/*.deb >/dev/null
         command -v zip xz advzip
+
+    # The runner image has several NDKs, and drops old ones over time.
+    - name: Find the NDK
+      if: inputs.packaging == 'true'
+      shell: bash
+      run: |
+        version=$(cat .ndk-version)
+        ndk=$ANDROID_HOME/ndk/$version
+        if [ ! -d "$ndk" ]; then
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$version" >/dev/null
+        fi
+        echo "ANDROID_NDK=$ndk" >>"$GITHUB_ENV"
