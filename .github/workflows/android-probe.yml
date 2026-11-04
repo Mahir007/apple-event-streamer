@@ -1,20 +1,16 @@
-# Temporary. Finds out what Android does with our binaries and the mpv app, to
-# decide how the Android build works. Delete it before this branch merges.
+# Temporary. Tests the real Android archive on emulators with Termux and the
+# mpv app, which CI can't otherwise do. Delete it before this branch merges.
 name: Android probe
 
 on:
   push:
     branches: [feat/android-universal-build]
-    paths:
-      - .github/android-probe/**
-      - .github/workflows/android-probe.yml
 
 permissions:
   contents: read
 
 env:
   GOTOOLCHAIN: local
-  NDK_VERSION: 29.0.14206865
   MPV_APK: https://github.com/mpv-android/mpv-android/releases/download/2026-09-17/app-default-x86_64-release.apk
 
 jobs:
@@ -25,15 +21,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: ./.github/actions/setup
         with:
-          go-version-file: .go-version
-          cache: false
-      - run: bash .github/android-probe/build.sh probe-bin
+          cache-name: build
+          packaging: 'true'
+      - run: make package VERSION=v0.0.0-probe
       - uses: actions/upload-artifact@v7
         with:
-          name: probe-bin
-          path: probe-bin/
+          name: probe-archive
+          path: dist/apple-event-streamer_v0.0.0-probe_android-amd64.tar.xz
           retention-days: 5
           if-no-files-found: error
 
@@ -44,39 +40,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # mpv's minimum. Termux's stable builds need Android 7.
+          # The mpv app's minimum. Needs Termux's build for Android 5 and 6.
           - name: android-6
             api: '23'
             target: google_apis
             termux: https://github.com/termux/termux-app/releases/download/v0.119.0-beta.3/termux-app_v0.119.0-beta.3%2Bapt-android-5-github-debug_x86_64.apk
+          # This emulator's hardware decoder hangs mpv, whatever the source.
           - name: android-11
             api: '30'
             target: google_apis
             termux: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
+            hwdec-no: '1'
           - name: android-17
             api: '37.0'
             target: google_apis
             termux: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
+          # Termux from Google Play, the newest debug build with an APK attached.
+          # The GitHub build can't start its own shell on 16 KB pages.
           - name: android-17-16k
             api: '37.0'
             target: google_apis_ps16k
-            termux: https://github.com/termux/termux-app/releases/download/v0.118.3/termux-app_v0.118.3%2Bgithub-debug_x86_64.apk
-          # A debug build of what Google Play ships, which targets the latest
-          # SDK. The newest release with an APK attached.
+            termux: https://github.com/termux-play-store/termux-apps/releases/download/termux-app-googleplay.2026.02.11/termux-app-debug-googleplay.2026.02.11.apk
           - name: android-17-play
             api: '37.0'
             target: google_apis
             termux: https://github.com/termux-play-store/termux-apps/releases/download/termux-app-googleplay.2026.02.11/termux-app-debug-googleplay.2026.02.11.apk
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
-          name: probe-bin
-          path: probe-bin
+          name: probe-archive
+          path: probe-archive
       - name: Download the apps
         env:
           TERMUX_APK: ${{ matrix.termux }}
@@ -90,6 +88,8 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - uses: reactivecircus/android-emulator-runner@v2
+        env:
+          MPV_HWDEC_NO: ${{ matrix.hwdec-no }}
         with:
           api-level: ${{ matrix.api }}
           target: ${{ matrix.target }}
@@ -100,7 +100,7 @@ jobs:
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-boot-anim -camera-back none -camera-front none
           disable-animations: true
-          script: bash .github/android-probe/host.sh probe-bin apks probe-out
+          script: bash .github/android-probe/host.sh probe-archive/apple-event-streamer_v0.0.0-probe_android-amd64.tar.xz apks probe-out
       - name: Summary
         if: always()
         run: cat probe-out/summary.md >>"$GITHUB_STEP_SUMMARY" || true
@@ -110,29 +110,3 @@ jobs:
           name: probe-${{ matrix.name }}
           path: probe-out/
           retention-days: 5
-
-  # Whether termux-docker can be the check job for each architecture. It has
-  # bionic and Termux's packages but not Android's seccomp filter or apps.
-  termux-docker:
-    name: termux-docker (${{ matrix.image }})
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { runner: ubuntu-latest, image: x86_64, bin: aes-android }
-          - { runner: ubuntu-24.04-arm, image: aarch64, bin: aes-android-arm64 }
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v8
-        with:
-          name: probe-bin
-          path: probe-bin
-      - env:
-          IMAGE: termux/termux-docker:${{ matrix.image }}
-          BIN: ${{ matrix.bin }}
-        run: bash .github/android-probe/docker.sh "$IMAGE" "$BIN" | tee -a "$GITHUB_STEP_SUMMARY"
