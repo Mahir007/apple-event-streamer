@@ -79,10 +79,10 @@ jobs:
           fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
-            gh release edit "$GITHUB_REF_NAME" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
+            gh release edit "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}"
           else
             gh release create "$GITHUB_REF_NAME" "${files[@]}" \
-              --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag "${flags[@]}"
+              --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag "${flags[@]}"
           fi
       - name: Delete the artifact
         env:
