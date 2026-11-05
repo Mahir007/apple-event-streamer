@@ -56,8 +56,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        os: [ubuntu-latest, macos-latest, windows-latest, android]
+    # Android's tests run in termux-docker on a Linux runner.
+    runs-on: ${{ matrix.os == 'android' && 'ubuntu-latest' || matrix.os }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -66,11 +67,17 @@ jobs:
       - uses: ./.github/actions/setup
         id: setup
         with:
-          cache-name: test
-      - run: go test ./...
+          cache-name: ${{ matrix.os == 'android' && 'test-android' || 'test' }}
+          ndk: ${{ matrix.os == 'android' }}
+      - if: matrix.os != 'android'
+        run: go test ./...
       # The race detector needs cgo, which the Linux runner has set up.
-      - if: runner.os == 'Linux'
+      - if: matrix.os == 'ubuntu-latest'
         run: make race
+      - if: matrix.os == 'android'
+        env:
+          TERMUX_IMAGE: &termux-x86_64 termux/termux-docker:x86_64@sha256:b67a4c8ea2d8a2ed7bd599f31e09b66707d6f5f23d0e3fd6defda17461cc7c6f
+        run: make test-android
       - name: Save Go caches
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.setup.outputs.go-cache-hit != 'true'
         uses: actions/cache/save@v6
@@ -157,7 +164,7 @@ jobs:
           - name: android amd64
             os: ubuntu-latest
             arch: amd64
-            image: termux/termux-docker:x86_64@sha256:b67a4c8ea2d8a2ed7bd599f31e09b66707d6f5f23d0e3fd6defda17461cc7c6f
+            image: *termux-x86_64
           - name: android arm64
             # GitHub has no -latest label for its Arm runners.
             os: ubuntu-24.04-arm

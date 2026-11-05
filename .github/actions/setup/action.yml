@@ -14,6 +14,9 @@ inputs:
   packaging:
     description: '"true" to set up the archive tools and NDK for `make package`.'
     default: 'false'
+  ndk:
+    description: '"true" to find the NDK without the archive tools.'
+    default: 'false'
 
 outputs:
   go-cache-paths:
@@ -105,7 +108,7 @@ runs:
 
     # The runner image has several NDKs, and drops old ones over time.
     - name: Find the NDK
-      if: inputs.packaging == 'true'
+      if: inputs.packaging == 'true' || inputs.ndk == 'true'
       shell: bash
       run: |
         version=$(cat .ndk-version)

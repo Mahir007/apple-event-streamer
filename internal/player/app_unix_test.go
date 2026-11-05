@@ -20,7 +20,7 @@ import (
 func asAndroid(t *testing.T) {
 	t.Helper()
 	oldAndroid, oldShell, oldTimeout, oldSettle := android, systemShell, loadTimeout, settleTime
-	android, systemShell, loadTimeout, settleTime = true, "/bin/sh", 5*time.Second, 200*time.Millisecond
+	android, systemShell, loadTimeout, settleTime = true, sh, 5*time.Second, 200*time.Millisecond
 	t.Cleanup(func() {
 		android, systemShell, loadTimeout, settleTime = oldAndroid, oldShell, oldTimeout, oldSettle
 	})
@@ -32,7 +32,7 @@ func fakeAm(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
 	args := filepath.Join(dir, "args")
-	script := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done >%q\n%s\n", args, body)
+	script := fmt.Sprintf("#!%s\nfor a in \"$@\"; do echo \"$a\"; done >%q\n%s\n", sh, args, body)
 	if err := os.WriteFile(filepath.Join(dir, "am"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestFindOnAndroid(t *testing.T) {
 		t.Fatalf("Find = %+v, %v", p, err)
 	}
 	// --mpv means a player in Termux, run the usual way.
-	p, err = Find("/bin/sh", "")
+	p, err = Find(sh, "")
 	if err != nil || p.Kind != MPV {
 		t.Fatalf("Find with --mpv = %+v, %v", p, err)
 	}

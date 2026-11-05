@@ -101,8 +101,9 @@ On Android the default player is the mpv app, which works differently:
 `.github/workflows/ci.yml` runs on every push to a branch:
 
 - lint: `go vet` for every target, staticcheck, govulncheck and actionlint.
-- test: the tests on Ubuntu, macOS and Windows, and on Ubuntu also under the
-  race detector.
+- test: the tests on Ubuntu, macOS, Windows and Android, and on Ubuntu also
+  under the race detector. Android's run as x86_64 in `termux-docker`, with
+  `make test-android`.
 - build: every target's archive, with the pinned Go version. It runs the Linux
   binary, and keeps the archives for a day as the run's `release` artifact.
   On a branch the version is `v0.0.0-dev+<commit>`.
