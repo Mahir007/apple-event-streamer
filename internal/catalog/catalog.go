@@ -53,7 +53,7 @@ func (r Range) Detail() string {
 	case HDR10:
 		return "HEVC · PQ"
 	case DolbyVision:
-		return "HEVC · PQ + Dolby Vision metadata"
+		return "HEVC · Profile 5"
 	case HLG:
 		return "HEVC · HLG"
 	}

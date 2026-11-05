@@ -126,14 +126,17 @@ func TestFetchCertificates(t *testing.T) {
 	srv.Config.ErrorLog = log.New(io.Discard, "", 0) // rejected handshakes are the point
 	srv.StartTLS()
 	defer srv.Close()
+	// Both requests end as soon as the certificate is rejected. The timeout only
+	// has to outlast the check, which macOS can take over a second to do.
+	const timeout = 30 * time.Second
 	// The test server's certificate isn't trusted by the default client.
-	_, err := fetcher(time.Second).Fetch(context.Background(), "the test page", srv.URL)
+	_, err := fetcher(timeout).Fetch(context.Background(), "the test page", srv.URL)
 	if err == nil || !strings.Contains(err.Error(), "isn't from a trusted authority") {
 		t.Fatalf("untrusted: err = %v", err)
 	}
 	// Trusted, but issued for 127.0.0.1 and example.com, not localhost.
 	f := &Fetcher{Client: srv.Client(), retryDelay: time.Millisecond}
-	f.Client.Timeout = time.Second
+	f.Client.Timeout = timeout
 	_, err = f.Fetch(context.Background(), "the test page", strings.Replace(srv.URL, "127.0.0.1", "localhost", 1))
 	if err == nil || !strings.Contains(err.Error(), "is for a different site") {
 		t.Fatalf("wrong host: err = %v", err)

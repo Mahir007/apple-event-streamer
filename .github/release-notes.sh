@@ -34,8 +34,9 @@ cat <<EOF
 | Windows | $(dl x64 windows-amd64.zip) · $(dl arm64 windows-arm64.zip) |
 | macOS (Intel and Apple silicon) | $(dl universal darwin-universal.tar.xz) |
 | Linux | $(dl x64 linux-amd64.tar.xz) · $(dl arm64 linux-arm64.tar.xz) |
+| Android | $(dl x64 android-amd64.tar.xz) · $(dl arm64 android-arm64.tar.xz) |
 
-You also need [mpv](https://mpv.io/installation/), or [mpv.net](https://github.com/mpvnet-player/mpv.net/releases/latest) on Windows.
+You also need [mpv](https://mpv.io/installation/), or [mpv.net](https://github.com/mpvnet-player/mpv.net/releases/latest) on Windows, or [Termux](https://termux.dev) and the [mpv app](https://github.com/mpv-android/mpv-android) on Android.
 
 ## Changes
 

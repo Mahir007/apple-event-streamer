@@ -2,7 +2,8 @@ name: Set up build
 description: >-
   Installs the Go version pinned in .go-version and restores the Go module and
   build/test caches. With packaging, also installs the archive tools used by
-  `make package` (cached as .debs so later runs skip apt-get update).
+  `make package` (cached as .debs so later runs skip apt-get update) and finds
+  the NDK pinned in .ndk-version.
 
 inputs:
   cache-name:
@@ -11,7 +12,10 @@ inputs:
       keeps its own.
     required: true
   packaging:
-    description: '"true" to install the archive tools for `make package`.'
+    description: '"true" to set up the archive tools and NDK for `make package`.'
+    default: 'false'
+  ndk:
+    description: '"true" to find the NDK without the archive tools.'
     default: 'false'
 
 outputs:
@@ -101,3 +105,34 @@ runs:
         fi
         sudo dpkg -i "$dir"/*.deb >/dev/null
         command -v zip xz advzip
+
+    # The runner image has several NDKs, and drops old ones over time.
+    - name: Find the NDK
+      if: inputs.packaging == 'true' || inputs.ndk == 'true'
+      id: ndk
+      shell: bash
+      run: |
+        version=$(cat .ndk-version)
+        ndk=$ANDROID_HOME/ndk/$version
+        {
+          echo "version=$version"
+          echo "path=$ndk"
+          if [ -d "$ndk" ]; then echo "found=true"; else echo "found=false"; fi
+        } >>"$GITHUB_OUTPUT"
+        echo "ANDROID_NDK=$ndk" >>"$GITHUB_ENV"
+
+    - name: Restore the NDK
+      if: steps.ndk.outputs.found == 'false'
+      id: ndk-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.ndk.outputs.path }}
+        key: ndk-${{ steps.ndk.outputs.version }}
+
+    - name: Install the NDK
+      if: steps.ndk.outputs.found == 'false' && steps.ndk-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ steps.ndk.outputs.version }}
+      run: |
+        "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$VERSION" >/dev/null

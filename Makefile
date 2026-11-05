@@ -1,9 +1,22 @@
 BINARY  := apple-event-streamer
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
-BUILD   := CGO_ENABLED=0 go build -trimpath -tags nethttpomithttp2 -ldflags '$(LDFLAGS)'
+GOBUILD := go build -trimpath -tags nethttpomithttp2 -ldflags '$(LDFLAGS)'
+BUILD   := CGO_ENABLED=0 $(GOBUILD)
 # macOS ships as one universal2 (x86_64 + arm64) binary.
-TARGETS := linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/universal
+TARGETS := linux/amd64 linux/arm64 android/amd64 android/arm64 windows/amd64 windows/arm64 darwin/universal
+
+# Android binaries use cgo and the NDK in .ndk-version: Go's own DNS resolver
+# doesn't work on Android, and android/amd64 can't link without cgo. API 23
+# (Android 6) is the oldest version the mpv app runs on.
+ANDROID_NDK ?= $(ANDROID_HOME)/ndk/$(shell cat .ndk-version)
+ANDROID_API := 23
+ANDROID_BIN := $(ANDROID_NDK)/toolchains/llvm/prebuilt/$(shell uname -s | tr A-Z a-z)-x86_64/bin
+
+# $(call androidbuild,GOARCH,OUTPUT)
+androidbuild = case $(1) in amd64) cpu=x86_64 ;; arm64) cpu=aarch64 ;; esac; \
+	GOOS=android GOARCH=$(1) CGO_ENABLED=1 CC="$(ANDROID_BIN)/$$cpu-linux-android$(ANDROID_API)-clang" \
+	$(GOBUILD) -o $(2) . && go run ./tools/androidelf $(2)
 
 # Windows executables embed a version resource (tools/winres); Task Manager
 # shows its description as the process name. The .syso exists only while
@@ -26,6 +39,7 @@ build:
 	@$(call gobuild,$$(go env GOOS),$$(go env GOARCH),$(BINARY)$$(go env GOEXE))
 
 dist:
+	@test -d "$(ANDROID_NDK)" || { echo "Android builds need NDK $$(cat .ndk-version): set ANDROID_NDK to its folder"; exit 1; }
 	@rm -rf dist && mkdir -p dist/.thin
 	@for t in $(TARGETS); do \
 		os=$${t%/*}; arch=$${t#*/}; ext=; [ $$os = windows ] && ext=.exe; \
@@ -35,6 +49,8 @@ dist:
 			GOOS=darwin GOARCH=amd64 $(BUILD) -o dist/.thin/darwin-amd64 . && \
 			GOOS=darwin GOARCH=arm64 $(BUILD) -o dist/.thin/darwin-arm64 . && \
 			go run ./tools/macuniversal -o $$out dist/.thin/darwin-amd64 dist/.thin/darwin-arm64 || exit 1; \
+		elif [ $$os = android ]; then \
+			$(call androidbuild,$$arch,$$out) || exit 1; \
 		else \
 			$(call gobuild,$$os,$$arch,$$out) || exit 1; \
 		fi; \
@@ -78,8 +94,28 @@ test:
 race:
 	CGO_ENABLED=1 go test -race ./...
 
+# Runs the tests in termux-docker, which has Android's libc and linker: set
+# TERMUX_IMAGE to the x86_64 image. The tools only run on the computer doing the
+# build, so they aren't included.
+test-android:
+	@test -d "$(ANDROID_NDK)" || { echo "Android tests need NDK $$(cat .ndk-version): set ANDROID_NDK to its folder"; exit 1; }
+	@mkdir -p .bin/android-test
+	@GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC="$(ANDROID_BIN)/x86_64-linux-android$(ANDROID_API)-clang" \
+		go test -c -o .bin/android-test/ . ./internal/...
+	@docker run --rm -v "$(CURDIR):/mnt/repo:ro" "$(TERMUX_IMAGE)" sh -c ' \
+		fail=0; \
+		cd /mnt/repo; \
+		for d in . internal/*; do \
+			n=$${d##*/}; [ $$d = . ] && n=$(BINARY); \
+			if (cd $$d && /mnt/repo/.bin/android-test/$$n.test) >"$$TMPDIR/out" 2>&1; then echo "ok    $$d"; \
+			else cat "$$TMPDIR/out"; echo "FAIL  $$d"; fail=1; fi; \
+		done; \
+		exit $$fail'
+
+# Android is checked as arm64 only: android/amd64 won't even type-check without
+# cgo, and the two compile the same files.
 vet:
-	@for t in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do \
+	@for t in linux/amd64 linux/arm64 android/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do \
 		GOOS=$${t%/*} GOARCH=$${t#*/} go vet ./... || exit 1; \
 	done
 
@@ -88,10 +124,10 @@ vet:
 lint:
 	@GOBIN=$(CURDIR)/.bin go install $(STATICCHECK) && \
 	GOBIN=$(CURDIR)/.bin go install $(GOVULNCHECK) && \
-	for os in linux windows darwin; do \
-		echo "  $$os"; \
-		GOOS=$$os GOARCH=amd64 .bin/staticcheck ./... || exit 1; \
-		GOOS=$$os GOARCH=amd64 .bin/govulncheck ./... || exit 1; \
+	for t in linux/amd64 android/arm64 windows/amd64 darwin/amd64; do \
+		echo "  $${t%/*}"; \
+		GOOS=$${t%/*} GOARCH=$${t#*/} .bin/staticcheck ./... || exit 1; \
+		GOOS=$${t%/*} GOARCH=$${t#*/} .bin/govulncheck ./... || exit 1; \
 	done
 
 clean:

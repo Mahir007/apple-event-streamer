@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -154,6 +155,9 @@ type model struct {
 
 	result        *Result
 	width, height int
+
+	swipe  int       // wheel events towards the next move on a touch screen
+	swiped time.Time // when a swipe last moved the cursor
 }
 
 func newModel(c *catalog.Catalog, h Header, p Preset) *model {
@@ -406,9 +410,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseWheelMsg:
 		switch msg.Button {
 		case tea.MouseWheelUp:
-			s.move(-1)
+			m.wheel(-1, time.Now())
 		case tea.MouseWheelDown:
-			s.move(1)
+			m.wheel(1, time.Now())
 		}
 	case tea.MouseMotionMsg:
 		if t, ok := m.hitTest(msg.X, msg.Y); ok && t.item >= 0 && !s.items[t.item].disabled {
@@ -422,6 +426,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t, ok := m.hitTest(msg.X, msg.Y)
 			switch {
 			case !ok:
+				// Swiping works anywhere on the screen, so tapping does too.
+				if touch && !s.items[s.cursor].disabled {
+					return m, m.choose()
+				}
 			case t.item >= 0 && !s.items[t.item].disabled:
 				s.cursor = t.item
 				return m, m.choose()
@@ -433,6 +441,33 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+const (
+	// swipeRows is how many wheel events make one move on a touch screen. Termux
+	// sends one for each row of text the finger passes, and three for each
+	// notch of a real wheel.
+	swipeRows = 3
+	// swipeGap is the shortest time between moves. Lifting a finger almost always
+	// starts a fling, a burst of up to half a screen of wheel events that would
+	// otherwise carry on moving the cursor.
+	swipeGap = 150 * time.Millisecond
+)
+
+// wheel moves the cursor for one wheel event.
+func (m *model) wheel(dir int, now time.Time) {
+	if !touch {
+		m.top().move(dir)
+		return
+	}
+	if now.Sub(m.swiped) < swipeGap {
+		return
+	}
+	m.swipe += dir
+	if m.swipe == swipeRows || m.swipe == -swipeRows {
+		m.swipe, m.swiped = 0, now
+		m.top().move(dir)
+	}
 }
 
 // ---- rendering ----
@@ -491,24 +526,51 @@ func (m *model) fit() (drop, vis int) {
 	if m.height <= 0 {
 		return 0, n
 	}
-	for want := min(n, 3); drop < dropHints && chrome(drop)+want > m.height; {
+	for want := min(n, 3); drop < dropHints && m.chrome(drop)+want > m.height; {
 		drop++
 	}
-	return drop, max(min(n, m.height-chrome(drop)), 1)
+	return drop, max(min(n, m.height-m.chrome(drop)), 1)
 }
 
 // chrome counts the lines other than items left after dropping drop parts.
-func chrome(drop int) int {
+func (m *model) chrome(drop int) int {
 	n := 1 // step title
 	for _, part := range []struct{ level, lines int }{
 		{dropTitle, 1}, {dropDescription, 2}, {dropCrumbs, 1}, {dropCrumbGap, 1},
-		{dropHints, 2}, {dropFooterGap, 1}, {dropHelp, 1}, {dropButtons, 1},
+		{dropHints, 2}, {dropFooterGap, 1}, {dropHelp, len(m.help())}, {dropButtons, 1},
 	} {
 		if drop < part.level {
 			n += part.lines
 		}
 	}
 	return n
+}
+
+// touch makes the help describe a touch screen. Termux sends a swipe as the
+// wheel, and keeps right-click for its own menu.
+var touch = runtime.GOOS == "android"
+
+// help returns the key and mouse help, wrapped to the terminal's width.
+func (m *model) help() []string {
+	const sep = " · "
+	parts := []string{"↑/↓ move", "enter select", "← back", "q quit"}
+	if touch {
+		parts = append(parts, "tap to choose", "swipe to move")
+	} else {
+		parts = append(parts, "mouse: click, wheel, right-click back")
+	}
+	var lines []string
+	line := parts[0]
+	for _, p := range parts[1:] {
+		// The help is indented by one column.
+		if m.width > 0 && 1+lipgloss.Width(line+sep+p) > m.width {
+			lines = append(lines, line)
+			line = p
+		} else {
+			line += sep + p
+		}
+	}
+	return append(lines, line)
 }
 
 func (m *model) layout() ([]string, []hitbox) {
@@ -605,7 +667,9 @@ func (m *model) layout() ([]string, []hitbox) {
 		lines = append(lines, "")
 	}
 	if drop < dropHelp {
-		lines = append(lines, " "+dimStyle.Render("↑/↓ move · enter select · ← back · q quit · mouse: click, wheel, right-click back"))
+		for _, l := range m.help() {
+			lines = append(lines, " "+dimStyle.Render(l))
+		}
 	}
 	if drop >= dropButtons {
 		return lines, hits
@@ -619,6 +683,9 @@ func (m *model) layout() ([]string, []hitbox) {
 	hits = append(hits, hitbox{y: y, x0: bx, x1: bx + lipgloss.Width(back), target: target{item: -1, button: "back"}})
 	qx := bx + lipgloss.Width(back) + 2
 	hits = append(hits, hitbox{y: y, x0: qx, x1: qx + lipgloss.Width(quit), target: target{item: -1, button: "quit"}})
+	// The rest of the row does nothing, so a tap that misses a button doesn't
+	// count as a tap on empty space.
+	hits = append(hits, hitbox{y: y, x0: 0, x1: 1 << 30, target: target{item: -1}})
 	lines = append(lines, " "+back+"  "+quit)
 	return lines, hits
 }
@@ -650,6 +717,11 @@ func (m *model) View() tea.View {
 	v := tea.NewView(strings.Join(lines, "\n"))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeAllMotion
+	if runtime.GOOS == "android" {
+		// Termux ignores any-motion tracking (mode 1003), so taps would do
+		// nothing. Touch screens have no hover to track anyway.
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	v.WindowTitle = "Apple Event Streamer"
 	return v
 }

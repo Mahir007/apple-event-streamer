@@ -2,13 +2,15 @@
 // defines it: the Downloads known folder on Windows (which follows the user
 // if they move it), XDG_DOWNLOAD_DIR from user-dirs.dirs on Linux and other
 // Unix desktops (often translated, e.g. ~/Téléchargements), ~/Downloads on
-// macOS.
+// macOS, ~/storage/downloads in Termux on Android.
 package userdirs
 
 import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
+	"os"
 	pathpkg "path"
 	"path/filepath"
 	"strings"
@@ -25,6 +27,18 @@ func Downloads() (string, error) {
 		return "", errors.New("couldn't find your Downloads folder")
 	}
 	return filepath.Clean(dir), nil
+}
+
+// termuxDownloads returns the link to the device's Downloads folder that
+// termux-setup-storage makes. Until that has been run the folder is missing,
+// and it has to stay that way: a real folder there would hold files no other
+// app can see.
+func termuxDownloads(home string) (string, error) {
+	dir := filepath.Join(home, "storage", "downloads")
+	if _, err := os.Stat(dir); err != nil {
+		return "", fmt.Errorf("%s isn't available, run termux-setup-storage", dir)
+	}
+	return dir, nil
 }
 
 // xdgDownloadDir returns XDG_DOWNLOAD_DIR from the contents of a

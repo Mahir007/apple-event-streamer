@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
+	"github.com/Mahir007/apple-event-streamer/internal/catalog"
 	"github.com/Mahir007/apple-event-streamer/internal/hls"
 )
 
@@ -184,5 +187,47 @@ func TestRun(t *testing.T) {
 	if _, err := run([]string{"--url", "missing.m3u8", "--best", "--no-launch"}); err == nil ||
 		!strings.Contains(err.Error(), "neither an http(s) URL nor an existing file") {
 		t.Errorf("missing file: %v", err)
+	}
+}
+
+func TestPrintList(t *testing.T) {
+	f, err := os.Open("internal/hls/testdata/vod.m3u8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	m, err := hls.Parse(f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := catalog.New(m, false)
+
+	list := func(width int) string {
+		var b strings.Builder
+		printList(&b, c, width)
+		return b.String()
+	}
+	if got := list(0); !strings.HasPrefix(got, "RANGE") {
+		t.Errorf("unknown width: %s", got)
+	}
+	if got, want := list(500), list(0); got != want {
+		t.Errorf("wide terminal:\n%s\nwant\n%s", got, want)
+	}
+
+	narrow := list(56)
+	if strings.Contains(narrow, "RANGE") || !strings.Contains(narrow, "SDR · AAC\nRES") {
+		t.Errorf("narrow terminal:\n%s", narrow)
+	}
+	for _, s := range c.Streams {
+		if !strings.Contains(narrow, s.VideoCodec) {
+			t.Errorf("narrow terminal: no %s in\n%s", s.VideoCodec, narrow)
+		}
+	}
+	for _, width := range []int{20, 40, 56} {
+		for _, l := range strings.Split(list(width), "\n") {
+			if n := lipgloss.Width(l); n > width {
+				t.Errorf("%d columns in a %d-column terminal: %q", n, width, l)
+			}
+		}
 	}
 }
