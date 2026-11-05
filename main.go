@@ -25,6 +25,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 
 	"github.com/Mahir007/apple-event-streamer/internal/catalog"
@@ -204,7 +206,9 @@ func run(args []string) (int, error) {
 	}
 
 	if o.list {
-		printList(os.Stdout, cat)
+		// The size is unknown, and so 0, when the output isn't a terminal.
+		width, _, _ := term.GetSize(os.Stdout.Fd())
+		printList(os.Stdout, cat, width)
 		return 0, nil
 	}
 
@@ -552,7 +556,10 @@ func keepFolder(dir string) (string, error) {
 	return dir, nil
 }
 
-func printList(w io.Writer, c *catalog.Catalog) {
+// printList prints every stream. If it knows the terminal's width and the table
+// is too wide for it, it prints a table for each video and audio pair, without
+// those two columns.
+func printList(w io.Writer, c *catalog.Catalog, width int) {
 	streams := append([]*catalog.Stream(nil), c.Streams...)
 	sort.SliceStable(streams, func(i, j int) bool {
 		a, b := streams[i], streams[j]
@@ -567,17 +574,51 @@ func printList(w io.Writer, c *catalog.Catalog) {
 		}
 		return a.Bandwidth() > b.Bandwidth()
 	})
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "RANGE\tAUDIO\tRESOLUTION\tPEAK\tAVERAGE\tVIDEO CODEC")
-	for _, s := range streams {
-		audio := s.Audio.String()
+	audio := func(s *catalog.Stream) string {
 		if c.AD {
-			audio += " (AD)"
+			return s.Audio.String() + " (AD)"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%dx%d\t%s\t%s\t%s\n", s.Range, audio, s.Width, s.Height,
+		return s.Audio.String()
+	}
+	rest := func(s *catalog.Stream) string {
+		return fmt.Sprintf("%dx%d\t%s\t%s\t%s", s.Width, s.Height,
 			catalog.Mbps(s.Bandwidth()), catalog.Mbps(s.AverageBandwidth()), sanitize.Text(s.VideoCodec))
 	}
+
+	var table bytes.Buffer
+	tw := tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "RANGE\tAUDIO\tRESOLUTION\tPEAK\tAVERAGE\tVIDEO CODEC")
+	for _, s := range streams {
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", s.Range, audio(s), rest(s))
+	}
 	tw.Flush()
+
+	if width > 0 && lipgloss.Width(table.String()) > width {
+		table.Reset()
+		// A line with no tabs ends tabwriter's columns, so each table lines up
+		// on its own.
+		tw = tabwriter.NewWriter(&table, 0, 0, 2, ' ', 0)
+		group := ""
+		for _, s := range streams {
+			if g := s.Range.String() + " · " + audio(s); g != group {
+				if group != "" {
+					fmt.Fprintln(tw)
+				}
+				group = g
+				fmt.Fprintln(tw, group)
+				fmt.Fprintln(tw, "RES\tPEAK\tAVERAGE\tCODEC")
+			}
+			fmt.Fprintln(tw, rest(s))
+		}
+		tw.Flush()
+		lines := strings.Split(table.String(), "\n")
+		for i, l := range lines {
+			lines[i] = ansi.Truncate(l, width, "…")
+		}
+		table.Reset()
+		table.WriteString(strings.Join(lines, "\n"))
+	}
+	table.WriteTo(w)
 
 	for _, r := range catalog.Ranges {
 		if !c.HasRange(r) {
@@ -589,7 +630,8 @@ func printList(w io.Writer, c *catalog.Catalog) {
 		for _, s := range subs {
 			langs = append(langs, s.Language())
 		}
-		fmt.Fprintf(w, "\nSubtitles (--sub-lang): %s", sanitize.Text(strings.Join(langs, ", ")))
+		line := "Subtitles (--sub-lang): " + sanitize.Text(strings.Join(langs, ", "))
+		fmt.Fprintf(w, "\n%s", ansi.Wordwrap(line, width, ""))
 	}
 	fmt.Fprintln(w)
 }
@@ -780,7 +822,8 @@ With no options an interactive picker is shown:
   video (SDR, SDR [HEVC], HDR10, Dolby Vision) › audio › resolution › bitrate
   (plus a subtitles step after audio with --subs)
 Use the arrow keys (or j/k), Enter to choose, ←/Esc to go back, q to quit; the
-mouse works too (click to choose, wheel to scroll, right-click to go back).
+mouse works too (click to choose, wheel to scroll, right-click to go back). On
+Android, tap to choose and swipe to scroll.
 
 Selection:
   --best              pick the highest-bitrate stream without asking

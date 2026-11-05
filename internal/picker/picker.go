@@ -491,24 +491,51 @@ func (m *model) fit() (drop, vis int) {
 	if m.height <= 0 {
 		return 0, n
 	}
-	for want := min(n, 3); drop < dropHints && chrome(drop)+want > m.height; {
+	for want := min(n, 3); drop < dropHints && m.chrome(drop)+want > m.height; {
 		drop++
 	}
-	return drop, max(min(n, m.height-chrome(drop)), 1)
+	return drop, max(min(n, m.height-m.chrome(drop)), 1)
 }
 
 // chrome counts the lines other than items left after dropping drop parts.
-func chrome(drop int) int {
+func (m *model) chrome(drop int) int {
 	n := 1 // step title
 	for _, part := range []struct{ level, lines int }{
 		{dropTitle, 1}, {dropDescription, 2}, {dropCrumbs, 1}, {dropCrumbGap, 1},
-		{dropHints, 2}, {dropFooterGap, 1}, {dropHelp, 1}, {dropButtons, 1},
+		{dropHints, 2}, {dropFooterGap, 1}, {dropHelp, len(m.help())}, {dropButtons, 1},
 	} {
 		if drop < part.level {
 			n += part.lines
 		}
 	}
 	return n
+}
+
+// touch makes the help describe a touch screen. Termux sends a swipe as the
+// wheel, and keeps right-click for its own menu.
+var touch = runtime.GOOS == "android"
+
+// help returns the key and mouse help, wrapped to the terminal's width.
+func (m *model) help() []string {
+	const sep = " · "
+	parts := []string{"↑/↓ move", "enter select", "← back", "q quit"}
+	if touch {
+		parts = append(parts, "tap to choose", "swipe to move")
+	} else {
+		parts = append(parts, "mouse: click, wheel, right-click back")
+	}
+	var lines []string
+	line := parts[0]
+	for _, p := range parts[1:] {
+		// The help is indented by one column.
+		if m.width > 0 && 1+lipgloss.Width(line+sep+p) > m.width {
+			lines = append(lines, line)
+			line = p
+		} else {
+			line += sep + p
+		}
+	}
+	return append(lines, line)
 }
 
 func (m *model) layout() ([]string, []hitbox) {
@@ -605,7 +632,9 @@ func (m *model) layout() ([]string, []hitbox) {
 		lines = append(lines, "")
 	}
 	if drop < dropHelp {
-		lines = append(lines, " "+dimStyle.Render("↑/↓ move · enter select · ← back · q quit · mouse: click, wheel, right-click back"))
+		for _, l := range m.help() {
+			lines = append(lines, " "+dimStyle.Render(l))
+		}
 	}
 	if drop >= dropButtons {
 		return lines, hits

@@ -95,7 +95,7 @@ apple-event-streamer --best --keep-playlist Videos/Playlists
 
 Use `↑`/`↓` or `j`/`k` to move, `Enter` or `→` to choose, `←`, `Esc` or
 `Backspace` to go back, `1`–`9` to choose directly and `q` to quit. The mouse
-works too.
+works too. On Android, tap to choose and swipe to move.
 
 Video types the event doesn't have (e.g. HDR10 for live events) are greyed
 out.

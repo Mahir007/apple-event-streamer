@@ -2,9 +2,11 @@ package picker
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Mahir007/apple-event-streamer/internal/catalog"
 	"github.com/Mahir007/apple-event-streamer/internal/hls"
@@ -104,5 +106,55 @@ func TestPresetsSkipSteps(t *testing.T) {
 	m := newModel(liveCatalog(t), Header{}, Preset{Range: &r, Audio: &a, Subs: &catalog.Subs{}})
 	if m.top().kind != stepResolution {
 		t.Fatalf("first step = %v, want resolution", m.top().kind)
+	}
+}
+
+// TestHelpWraps checks the whole help shows on a narrow terminal, such as a
+// phone in portrait, and that the wrapped lines don't move the buttons' hitboxes
+// off the buttons.
+func TestHelpWraps(t *testing.T) {
+	old := touch
+	t.Cleanup(func() { touch = old })
+	for _, c := range []struct {
+		touch bool
+		parts []string
+	}{
+		{false, []string{"enter select", "q quit", "mouse: click, wheel, right-click back"}},
+		{true, []string{"enter select", "q quit", "tap to choose", "swipe to move"}},
+	} {
+		touch = c.touch
+		for _, width := range []int{45, 56, 80, 120} {
+			m := newModel(liveCatalog(t), Header{}, Preset{})
+			m.Update(tea.WindowSizeMsg{Width: width, Height: 40})
+			view := ansi.Strip(m.View().Content)
+			for _, part := range c.parts {
+				if !strings.Contains(view, part) {
+					t.Errorf("touch %v, width %d: no %q in\n%s", c.touch, width, part, view)
+				}
+			}
+			if touch && strings.Contains(view, "right-click") {
+				t.Errorf("width %d: the help offers right-click on a touch screen", width)
+			}
+			lines, _ := m.layout()
+			y := len(lines) - 1
+			if !strings.Contains(ansi.Strip(lines[y]), "Quit") {
+				t.Fatalf("last line is %q", ansi.Strip(lines[y]))
+			}
+			x := strings.Index(ansi.Strip(lines[y]), "Quit")
+			if got, ok := m.hitTest(x, y); !ok || got.button != "quit" {
+				t.Errorf("touch %v, width %d: hitTest = %+v, %v", c.touch, width, got, ok)
+			}
+		}
+	}
+}
+
+// TestWrappedHelpFitsHeight checks a terminal that's both narrow and short.
+func TestWrappedHelpFitsHeight(t *testing.T) {
+	for height := 2; height < 30; height++ {
+		m := newModel(liveCatalog(t), Header{}, Preset{})
+		m.Update(tea.WindowSizeMsg{Width: 30, Height: height})
+		if n := len(strings.Split(m.View().Content, "\n")); n > height {
+			t.Errorf("%d lines in a %d-line terminal", n, height)
+		}
 	}
 }

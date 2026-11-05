@@ -93,6 +93,8 @@ On Android the default player is the mpv app, which works differently:
   library the shell loads and Go's `execve` bypasses. `/system/bin/am` itself
   is refused from an app.
 - The picker asks for mouse mode 1002 instead of 1003, which Termux ignores.
+  Its help says tap and swipe, as Termux sends a swipe as the wheel and keeps
+  right-click for its own menu.
 
 ## CI
 
