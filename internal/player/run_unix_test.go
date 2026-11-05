@@ -5,16 +5,25 @@ package player
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
 )
 
+// sh is the test system's shell. Android has no /bin.
+var sh = func() string {
+	if runtime.GOOS == "android" {
+		return "/system/bin/sh"
+	}
+	return "/bin/sh"
+}()
+
 // script writes an executable shell script standing in for the player.
 func script(t *testing.T, body string) *Player {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "player")
-	if err := os.WriteFile(p, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+	if err := os.WriteFile(p, []byte("#!"+sh+"\n"+body+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return &Player{Kind: MPV, Path: p}
@@ -33,8 +42,10 @@ func TestRunPassesExitCodeAndCleansUp(t *testing.T) {
 func TestRunCleansUpWhenStartFails(t *testing.T) {
 	cleaned := false
 	p := &Player{Kind: MPV, Path: filepath.Join(t.TempDir(), "missing")}
-	if _, err := p.Run(nil, func() { cleaned = true }); err == nil || !cleaned {
-		t.Fatalf("err=%v cleaned=%v", err, cleaned)
+	// On Android it's the shell that fails to start the player, so this is an
+	// exit code rather than an error.
+	if code, err := p.Run(nil, func() { cleaned = true }); (err == nil && code == 0) || !cleaned {
+		t.Fatalf("code=%d err=%v cleaned=%v", code, err, cleaned)
 	}
 }
 
