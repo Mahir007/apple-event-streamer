@@ -109,11 +109,30 @@ runs:
     # The runner image has several NDKs, and drops old ones over time.
     - name: Find the NDK
       if: inputs.packaging == 'true' || inputs.ndk == 'true'
+      id: ndk
       shell: bash
       run: |
         version=$(cat .ndk-version)
         ndk=$ANDROID_HOME/ndk/$version
-        if [ ! -d "$ndk" ]; then
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$version" >/dev/null
-        fi
+        {
+          echo "version=$version"
+          echo "path=$ndk"
+          if [ -d "$ndk" ]; then echo "found=true"; else echo "found=false"; fi
+        } >>"$GITHUB_OUTPUT"
         echo "ANDROID_NDK=$ndk" >>"$GITHUB_ENV"
+
+    - name: Restore the NDK
+      if: steps.ndk.outputs.found == 'false'
+      id: ndk-cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.ndk.outputs.path }}
+        key: ndk-${{ steps.ndk.outputs.version }}
+
+    - name: Install the NDK
+      if: steps.ndk.outputs.found == 'false' && steps.ndk-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ steps.ndk.outputs.version }}
+      run: |
+        "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$VERSION" >/dev/null

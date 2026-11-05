@@ -100,16 +100,14 @@ race:
 test-android:
 	@test -d "$(ANDROID_NDK)" || { echo "Android tests need NDK $$(cat .ndk-version): set ANDROID_NDK to its folder"; exit 1; }
 	@mkdir -p .bin/android-test
-	@for d in . internal/*; do \
-		GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC="$(ANDROID_BIN)/x86_64-linux-android$(ANDROID_API)-clang" \
-		go test -c -o .bin/android-test/$$(echo $$d | tr / _).test ./$$d || exit 1; \
-	done
+	@GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC="$(ANDROID_BIN)/x86_64-linux-android$(ANDROID_API)-clang" \
+		go test -c -o .bin/android-test/ . ./internal/...
 	@docker run --rm -v "$(CURDIR):/mnt/repo:ro" "$(TERMUX_IMAGE)" sh -c ' \
 		fail=0; \
 		cd /mnt/repo; \
 		for d in . internal/*; do \
-			t=/mnt/repo/.bin/android-test/$$(echo $$d | tr / _).test; \
-			if (cd $$d && $$t) >"$$TMPDIR/out" 2>&1; then echo "ok    $$d"; \
+			n=$${d##*/}; [ $$d = . ] && n=$(BINARY); \
+			if (cd $$d && /mnt/repo/.bin/android-test/$$n.test) >"$$TMPDIR/out" 2>&1; then echo "ok    $$d"; \
 			else cat "$$TMPDIR/out"; echo "FAIL  $$d"; fail=1; fi; \
 		done; \
 		exit $$fail'
