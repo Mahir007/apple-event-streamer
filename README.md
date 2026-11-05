@@ -15,7 +15,7 @@ replay) in [mpv](https://mpv.io),
  ❯ SDR            H.264 / AVC
    SDR [HEVC]     H.265 / HEVC
    HDR10          HEVC · PQ
-   Dolby Vision   HEVC · PQ + Dolby Vision metadata
+   Dolby Vision   HEVC · Profile 5
 
  ↑/↓ move · enter select · ← back · q quit · mouse: click, wheel, right-click back
   ‹ Back    Quit
