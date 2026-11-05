@@ -143,14 +143,26 @@ jobs:
 
   # The checks a user's computer would make: its own tools extract the
   # archive, and the binary starts and says its version. On macOS, both
-  # halves of the universal2 binary run, x86_64 through Rosetta.
+  # halves of the universal2 binary run, x86_64 through Rosetta. Android
+  # binaries can't run on a Linux runner, so they run in termux-docker, which
+  # has Android's libc and linker with Termux's tools.
   check:
-    name: check (${{ matrix.os }})
+    name: check (${{ matrix.name || matrix.os }})
     needs: build
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
+        include:
+          - name: android amd64
+            os: ubuntu-latest
+            arch: amd64
+            image: termux/termux-docker:x86_64@sha256:b67a4c8ea2d8a2ed7bd599f31e09b66707d6f5f23d0e3fd6defda17461cc7c6f
+          - name: android arm64
+            # GitHub has no -latest label for its Arm runners.
+            os: ubuntu-24.04-arm
+            arch: arm64
+            image: termux/termux-docker:aarch64@sha256:070632a59051dbaf9e3edc7d74cbdbac9d906c8cb65b91ece3af8186c3ea4f99
     runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     steps:
@@ -192,38 +204,19 @@ jobs:
             Write-Output "::error::The binary says '$got'"
             exit 1
           }
-
-  # Android binaries can't run on a Linux runner. termux-docker has Android's
-  # libc and linker with Termux's tools, so this extracts and runs the archive
-  # as Termux would.
-  check-android:
-    name: check (android ${{ matrix.arch }})
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            os: ubuntu-latest
-            image: termux/termux-docker:x86_64@sha256:b67a4c8ea2d8a2ed7bd599f31e09b66707d6f5f23d0e3fd6defda17461cc7c6f
-          - arch: arm64
-            # GitHub has no -latest label for its Arm runners.
-            os: ubuntu-24.04-arm
-            image: termux/termux-docker:aarch64@sha256:070632a59051dbaf9e3edc7d74cbdbac9d906c8cb65b91ece3af8186c3ea4f99
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: release
-          path: dist
       - name: Check the Android archive
+        if: runner.os == 'Linux'
         env:
           VERSION: ${{ needs.build.outputs.version }}
           ARCH: ${{ matrix.arch }}
           IMAGE: ${{ matrix.image }}
         run: |
           dir=apple-event-streamer_${VERSION}_android-$ARCH
-          docker run --rm -v "$PWD/dist:/mnt/dist:ro" "$IMAGE" sh -c \
-            "cd \"\$TMPDIR\" && tar -xf /mnt/dist/$dir.tar.xz && cd $dir && ls -l >&2 && ./apple-event-streamer --version" | tee version.txt
-          grep -qxF "apple-event-streamer $VERSION (android/$ARCH)" version.txt
+          docker run --rm -v "$PWD/dist:/mnt/dist:ro" "$IMAGE" sh -c "
+            cd \"\$TMPDIR\" &&
+            tar -xf /mnt/dist/$dir.tar.xz &&
+            cd $dir &&
+            ls -l >&2 &&
+            ./apple-event-streamer --version
+          " | tee "$RUNNER_TEMP/version.txt"
+          grep -qxF "apple-event-streamer $VERSION (android/$ARCH)" "$RUNNER_TEMP/version.txt"

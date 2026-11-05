@@ -106,13 +106,12 @@ On Android the default player is the mpv app, which works differently:
 - build: every target's archive, with the pinned Go version. It runs the Linux
   binary, and keeps the archives for a day as the run's `release` artifact.
   On a branch the version is `v0.0.0-dev+<commit>`.
-- check: extracts the macOS and Windows archives on those systems and runs the
-  binary. On macOS it runs both halves of the universal2 binary, x86_64
-  through Rosetta, and fails if the runner has no Rosetta.
-- check (android): extracts the Android archives and runs the binary in
-  `termux-docker`, which has Android's libc and linker with Termux's tools. It
-  has neither Android's seccomp filter nor its apps, so playback needs a real
-  device or an emulator.
+- check: extracts the macOS, Windows and Android archives and runs the binary.
+  On macOS it runs both halves of the universal2 binary, x86_64 through Rosetta,
+  and fails if the runner has no Rosetta. Android's run in `termux-docker`,
+  which has Android's libc and linker with Termux's tools. It has neither
+  Android's seccomp filter nor its apps, so playback needs a real device or an
+  emulator.
 
 The jobs use `.github/actions/setup`. It restores the newest Go module and
 build cache for the job, falling back to older commits and `go.sum` versions,

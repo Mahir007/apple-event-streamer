@@ -12,7 +12,7 @@ inputs:
       keeps its own.
     required: true
   packaging:
-    description: '"true" to install the archive tools for `make package`.'
+    description: '"true" to set up the archive tools and NDK for `make package`.'
     default: 'false'
 
 outputs:
