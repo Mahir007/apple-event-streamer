@@ -49,13 +49,17 @@ jobs:
       # one, which loses the tag message used in the release notes.
       - name: Fetch tags
         run: git fetch --force --tags origin
+      # For tools/releasenotes. The build job's cache has what it compiles.
+      - uses: ./.github/actions/setup
+        with:
+          cache-name: build
       - uses: actions/download-artifact@v8
         with:
           name: release
           path: dist
       - name: Write the release notes
         run: |
-          .github/release-notes.sh "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" >"$RUNNER_TEMP/notes.md"
+          go run ./tools/releasenotes "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" dist/*.sha256 >"$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md" >>"$GITHUB_STEP_SUMMARY"
       # Attestations need a public repository on GitHub's free plans.
       - name: Attest

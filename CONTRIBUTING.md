@@ -51,6 +51,7 @@ and trips antivirus.
   linker doesn't know the flag and prints a warning for it on every run.
 - `tools/macuniversal` joins the two macOS binaries into one universal2
   binary. It's a Go `lipo -create`, so it builds anywhere.
+- `tools/releasenotes` writes a release's notes. See [Releases](#releases).
 - `tools/thirdparty` writes `THIRD_PARTY_LICENSES` from the modules that
   `go list -deps` reports for each target, plus the NDK's C startup code.
 - `tools/winres` writes the Windows version resource (the description shown in
@@ -131,14 +132,21 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-`.github/release-notes.sh` writes the release notes: a download table and the
-commit subjects since the previous release. A stable release lists everything
-since the previous stable release, including its release candidates. Commits
-that only change `.github/` or `.gitignore` are left out. If the tag message
-says more than the tag name, it goes at the top:
+`tools/releasenotes` writes the release notes: a download table, the commits
+since the previous release and the archives' checksums. A stable release lists
+everything since the previous stable release, including its release
+candidates. Breaking changes, features, fixes, performance and documentation
+get their own sections, with the text of a `BREAKING CHANGE:` footer. Other
+commits go in a collapsed section, and a reverted commit is left out with its
+revert. If an annotated tag's message says more than the tag name, it goes at
+the top:
 
 ```sh
 git tag -s v1.1.0 -m "v1.1.0" -m "Adds --foo. Linux builds now need glibc 2.31."
 ```
 
-Run the script with a tag to preview the notes.
+To preview the notes, run it with a tag and the `.sha256` files:
+
+```sh
+go run ./tools/releasenotes v1.1.0 Mahir007/apple-event-streamer dist/*.sha256
+```
