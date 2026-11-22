@@ -100,13 +100,17 @@ jobs:
           cache-name: build
           packaging: 'true'
 
-      # The archive names and --version keep the tag's v, such as v1.0.0.
+      # The archive names and --version keep the tag's v, such as v1.0.0, and
+      # a pre-release or a branch build has the commit too, such as
+      # v1.0.0-rc.1+<commit> or v0.0.0-dev+<commit>.
       - name: Build packages
         id: package
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          version=v${VERSION:-0.0.0-dev+${GITHUB_SHA::7}}
+          version=${VERSION:-0.0.0-dev}
+          [[ $version != *-* ]] || version+=+$(git rev-parse HEAD | cut -c1-7)
+          version=v$version
           make package VERSION="$version"
           echo "version=$version" >>"$GITHUB_OUTPUT"
 

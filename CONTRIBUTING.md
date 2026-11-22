@@ -146,6 +146,9 @@ Pushing a tag that starts with `v` runs `.github/workflows/release.yml`. It
 runs CI with the tag's version, then publishes a GitHub release with CI's
 archives, their `.sha256` files and an attestation of where they were built.
 Tags with a `-` (such as `v1.1.0-rc.1`) are marked as pre-releases.
+Pre-releases are `-alpha.N`, `-beta.N` or `-rc.N`, counting from 1, and their
+binaries and archive names have the commit too, such as
+`v1.1.0-rc.1+1a2b3c4`.
 
 ```sh
 git tag -a v1.0.0 -m "v1.0.0"
