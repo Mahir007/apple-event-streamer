@@ -3,7 +3,7 @@
 ## Building
 
 You need Go 1.26 or later. Releases use the Go version pinned in
-`.go-version` (1.26.10). The Go version decides the oldest macOS the binary
+`.go-version` (1.26.11). The Go version decides the oldest macOS the binary
 runs on: Go 1.26 supports macOS 12 Monterey, Go 1.27 and later need macOS 13
 Ventura.
 
