@@ -148,7 +148,7 @@ archives, their `.sha256` files and an attestation of where they were built.
 Tags with a `-` (such as `v1.1.0-rc.1`) are marked as pre-releases.
 
 ```sh
-git tag v1.0.0
+git tag -a v1.0.0 -m "v1.0.0"
 git push origin v1.0.0
 ```
 
@@ -158,11 +158,15 @@ everything since the previous stable release, including its release
 candidates. Breaking changes, features, fixes, performance and documentation
 get their own sections, with the text of a `BREAKING CHANGE:` footer. Other
 commits go in a collapsed section, and a reverted commit is left out with its
-revert. If an annotated tag's message says more than the tag name, it goes at
-the top:
+revert.
+
+The download table lists the archives the release's `.sha256` files name,
+with the labels in `kinds` in `tools/releasenotes/main.go`, and links the
+README's quick start at the tag. A new kind of archive needs an entry in
+`kinds`. A second `-m` on the tag adds a summary at the top of the notes:
 
 ```sh
-git tag -s v1.1.0 -m "v1.1.0" -m "Adds --foo. Linux builds now need glibc 2.31."
+git tag -a v1.1.0 -m "v1.1.0" -m "Adds --foo. Linux builds now need glibc 2.31."
 ```
 
 To preview the notes, run it with a tag and the `.sha256` files:
