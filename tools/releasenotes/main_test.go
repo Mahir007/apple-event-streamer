@@ -178,6 +178,7 @@ func TestBreakingFooter(t *testing.T) {
 func TestSentence(t *testing.T) {
 	for in, want := range map[string]string{
 		"add a thing":      "Add a thing",
+		"don't ask":        "Don't ask",
 		"--keep-playlist":  "--keep-playlist",
 		"go.mod is tidied": "go.mod is tidied",
 	} {

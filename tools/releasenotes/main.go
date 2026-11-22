@@ -25,7 +25,7 @@ var (
 	subjectPattern = regexp.MustCompile(`^([a-zA-Z]+)(?:\(([^)]+)\))?(!)?: (.+)$`)
 	breakingLine   = regexp.MustCompile(`^BREAKING[ -]CHANGE: (.*)$`)
 	footerLine     = regexp.MustCompile(`^[A-Za-z-]+(?:: | #)`)
-	plainWord      = regexp.MustCompile(`^[a-z]+(\s|$)`)
+	plainWord      = regexp.MustCompile(`^[a-z]+('[a-z]+)?(\s|$)`)
 	// git revert names the reverted commit in the body and quotes its subject
 	// in the revert's subject, which may be reworded to revert: <subject>.
 	revertsLine   = regexp.MustCompile(`This reverts commit ([0-9a-f]{7,40})`)
