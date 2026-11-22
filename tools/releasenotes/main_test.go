@@ -243,12 +243,12 @@ func TestDownloads(t *testing.T) {
 	}
 	var names []string
 	for _, d := range got {
-		names = append(names, d.name+" | "+d.label+" | "+d.system)
+		names = append(names, d.name+" | "+d.system+" | "+d.link)
 	}
 	if want := []string{
-		"apple-event-streamer_v1.1.0_windows-arm64.zip | Windows arm64 | Windows",
-		"apple-event-streamer_v1.1.0_darwin-universal.tar.xz | macOS, Apple silicon and Intel | macOS",
-		"apple-event-streamer_v1.1.0_linux-amd64.tar.xz | Linux x64 | Linux",
+		"apple-event-streamer_v1.1.0_windows-arm64.zip | Windows | arm64",
+		"apple-event-streamer_v1.1.0_darwin-universal.tar.xz | macOS | universal",
+		"apple-event-streamer_v1.1.0_linux-amd64.tar.xz | Linux | x64",
 	}; !slices.Equal(names, want) {
 		t.Errorf("downloads = %q, want %q", names, want)
 	}
@@ -265,9 +265,13 @@ func TestNotes(t *testing.T) {
 		parseCommit(c, "docs: explain --keep-playlist", ""),
 		parseCommit(d, "ci: run the tests", ""),
 	}
-	windows := "apple-event-streamer_v1.1.0-rc.1+abc1234_windows-amd64.zip"
-	linux := "apple-event-streamer_v1.1.0-rc.1+abc1234_linux-amd64.tar.xz"
-	archives, err := downloads([]string{"abc123  " + linux + "\n", "def456  " + windows + "\n"})
+	file := func(target string) string { return "apple-event-streamer_v1.1.0-rc.1+abc1234_" + target }
+	dl := func(name string) string { return url + "/releases/download/v1.1.0-rc.1/" + name }
+	archives, err := downloads([]string{
+		"1  " + file("linux-amd64.tar.xz") + "\n",
+		"2  " + file("windows-amd64.zip") + "\n3  " + file("windows-arm64.zip") + "\n",
+		"4  " + file("darwin-universal.tar.xz") + "\n",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,10 +284,11 @@ func TestNotes(t *testing.T) {
 		"",
 		"## Download",
 		"",
-		"| File | For |",
+		"| System | Download |",
 		"| --- | --- |",
-		"| [" + windows + "](" + url + "/releases/download/v1.1.0-rc.1/" + windows + ") | Windows x64 |",
-		"| [" + linux + "](" + url + "/releases/download/v1.1.0-rc.1/" + linux + ") | Linux x64 |",
+		"| Windows | [x64](" + dl(file("windows-amd64.zip")) + ") · [arm64](" + dl(file("windows-arm64.zip")) + ") |",
+		"| macOS (Apple silicon and Intel) | [universal](" + dl(file("darwin-universal.tar.xz")) + ") |",
+		"| Linux | [x64](" + dl(file("linux-amd64.tar.xz")) + ") |",
 		"",
 		"For how to install it, see [Quick start](" + url + "/blob/v1.1.0-rc.1/README.md#quick-start) in the README.",
 		"",
@@ -313,21 +318,46 @@ func TestNotes(t *testing.T) {
 		"<details>",
 		"<summary>🔒 SHA-256</summary>",
 		"",
-		"```",
-		"def456  " + windows,
-		"abc123  " + linux,
+		"Download the file's `.sha256` too, and run its line in the folder with both. It prints `OK` or `True` if the file is intact.",
+		"",
+		"Windows, in PowerShell:",
+		"",
+		"```powershell",
+		"$hash, $file = (Get-Content '" + file("windows-amd64.zip") + ".sha256') -split '\\s+'; (Get-FileHash $file).Hash -eq $hash",
+		"$hash, $file = (Get-Content '" + file("windows-arm64.zip") + ".sha256') -split '\\s+'; (Get-FileHash $file).Hash -eq $hash",
 		"```",
 		"",
-		"To check your downloads, put them and their `.sha256` files in a folder of their own, and run the command for your system there. Delete older copies first, so your browser doesn't rename the new ones.",
+		"macOS:",
 		"",
-		"- Linux: `sha256sum -c *.sha256`",
-		"- Windows, in PowerShell: `Get-ChildItem *.sha256 | ForEach-Object { $hash, $file = (Get-Content $_.FullName) -split '\\s+'; \"${file}: $((Get-FileHash $file).Hash -eq $hash)\" }`",
+		"```sh",
+		"shasum -a 256 -c '" + file("darwin-universal.tar.xz") + ".sha256'",
+		"```",
+		"",
+		"Linux:",
+		"",
+		"```sh",
+		"sha256sum -c '" + file("linux-amd64.tar.xz") + ".sha256'",
+		"```",
 		"",
 		"</details>",
 		"",
 	}, "\n")
 	if got != want {
 		t.Errorf("notes =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestALinkWithoutTextShowsTheName(t *testing.T) {
+	saved := kinds
+	t.Cleanup(func() { kinds = saved })
+	kinds = []kind{{"*.zip", "Windows", ""}}
+	archives, err := downloads([]string{"1  app.zip\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := notes("v1.0.0", "me/repo", "", nil, archives, "", "")
+	if want := "| Windows | [app.zip](" + url + "/releases/download/v1.0.0/app.zip) |"; !strings.Contains(text, want) {
+		t.Errorf("the notes don't have %q:\n%s", want, text)
 	}
 }
 

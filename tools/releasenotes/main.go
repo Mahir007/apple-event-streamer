@@ -36,25 +36,30 @@ var (
 	notInAnchor   = regexp.MustCompile(`[^\p{L}\p{N}_\- ]`)
 )
 
-// The files a release has: a glob for the name, what the file is for, and its
-// system, in the order of the download table.
-var kinds = []struct{ glob, label, system string }{
-	{"*_windows-amd64.zip", "Windows x64", "Windows"},
-	{"*_windows-arm64.zip", "Windows arm64", "Windows"},
-	{"*_darwin-universal.tar.xz", "macOS, Apple silicon and Intel", "macOS"},
-	{"*_linux-amd64.tar.xz", "Linux x64", "Linux"},
-	{"*_linux-arm64.tar.xz", "Linux arm64", "Linux"},
-	{"*_android-amd64.tar.xz", "Android x64", "Android"},
-	{"*_android-arm64.tar.xz", "Android arm64", "Android"},
+// The files a release has, in the order of the download table: a glob for the
+// name, its system, and its link text, or "" for the file's name.
+type kind struct{ glob, system, link string }
+
+var kinds = []kind{
+	{"*_windows-amd64.zip", "Windows", "x64"},
+	{"*_windows-arm64.zip", "Windows", "arm64"},
+	{"*_darwin-universal.tar.xz", "macOS", "universal"},
+	{"*_linux-amd64.tar.xz", "Linux", "x64"},
+	{"*_linux-arm64.tar.xz", "Linux", "arm64"},
+	{"*_android-amd64.tar.xz", "Android", "x64"},
+	{"*_android-arm64.tar.xz", "Android", "arm64"},
 }
 
-// The command that checks the downloads on each system, in the order they're
-// listed.
-var checks = []struct{ system, command string }{
-	{"macOS", "macOS: `shasum -a 256 -c *.sha256`"},
-	{"Linux", "Linux: `sha256sum -c *.sha256`"},
-	{"Android", "Android: `sha256sum -c *.sha256`"},
-	{"Windows", "Windows, in PowerShell: `Get-ChildItem *.sha256 | ForEach-Object { $hash, $file = (Get-Content $_.FullName) -split '\\s+'; \"${file}: $((Get-FileHash $file).Hash -eq $hash)\" }`"},
+// Longer names for systems' rows in the download table.
+var rowNames = map[string]string{"macOS": "macOS (Apple silicon and Intel)"}
+
+// How to check a file on each system: the heading, the code block's language,
+// and the command, with {file} for the file's name.
+var checks = map[string]struct{ heading, lang, command string }{
+	"Windows": {"Windows, in PowerShell", "powershell", `$hash, $file = (Get-Content '{file}.sha256') -split '\s+'; (Get-FileHash $file).Hash -eq $hash`},
+	"macOS":   {"macOS", "sh", "shasum -a 256 -c '{file}.sha256'"},
+	"Linux":   {"Linux", "sh", "sha256sum -c '{file}.sha256'"},
+	"Android": {"Android", "sh", "sha256sum -c '{file}.sha256'"},
 }
 
 // The sections with a heading, in order. Every other commit goes in a
@@ -178,8 +183,8 @@ func anchor(h string) string {
 
 // A file in the release, from its line in a .sha256 file.
 type download struct {
-	name, label, system, checksum string
-	order                         int
+	name, system, link string
+	order              int
 }
 
 // downloads returns the archives the .sha256 files name, in the order of
@@ -194,14 +199,14 @@ func downloads(sums []string) ([]download, error) {
 				continue
 			}
 			name := strings.TrimPrefix(strings.TrimSpace(line[len(fields[0]):]), "*")
-			i := slices.IndexFunc(kinds, func(f struct{ glob, label, system string }) bool {
+			i := slices.IndexFunc(kinds, func(f kind) bool {
 				ok, _ := path.Match(f.glob, name)
 				return ok
 			})
 			if i < 0 {
 				return nil, fmt.Errorf("%s matches none of the files in kinds", name)
 			}
-			found = append(found, download{name, kinds[i].label, kinds[i].system, line, i})
+			found = append(found, download{name, kinds[i].system, kinds[i].link, i})
 		}
 	}
 	slices.SortStableFunc(found, func(a, b download) int {
@@ -354,6 +359,24 @@ func entry(c commit, url, text string) string {
 	return fmt.Sprintf("- %s ([`%s`](%s/commit/%s))", text, c.sha[:7], url, c.sha)
 }
 
+// groups splits the archives by key, keeping the order in which each key
+// first comes.
+func groups(archives []download, key func(download) string) [][]download {
+	var out [][]download
+	at := map[string]int{}
+	for _, d := range archives {
+		k := key(d)
+		i, ok := at[k]
+		if !ok {
+			i = len(out)
+			at[k] = i
+			out = append(out, nil)
+		}
+		out[i] = append(out[i], d)
+	}
+	return out
+}
+
 func notes(tag, repo, previous string, log []commit, archives []download, message, readme string) string {
 	url := "https://github.com/" + repo
 	var parts []string
@@ -366,21 +389,27 @@ func notes(tag, repo, previous string, log []commit, archives []download, messag
 		parts = append(parts, message)
 	}
 
-	download := []string{"## Download"}
+	downloadPart := []string{"## Download"}
 	if len(archives) > 0 {
-		rows := []string{"| File | For |", "| --- | --- |"}
-		for _, f := range archives {
-			rows = append(rows, fmt.Sprintf("| [%s](%s/releases/download/%s/%s) | %s |", f.name, url, tag, f.name, f.label))
+		table := []string{"| System | Download |", "| --- | --- |"}
+		for _, system := range groups(archives, func(d download) string { return d.system }) {
+			var links []string
+			for _, f := range system {
+				text := cmp.Or(f.link, f.name)
+				links = append(links, fmt.Sprintf("[%s](%s/releases/download/%s/%s)", text, url, tag, f.name))
+			}
+			name := cmp.Or(rowNames[system[0].system], system[0].system)
+			table = append(table, "| "+name+" | "+strings.Join(links, " · ")+" |")
 		}
-		download = append(download, strings.Join(rows, "\n"))
+		downloadPart = append(downloadPart, strings.Join(table, "\n"))
 	}
 	link := url + "/blob/" + tag + "/README.md"
 	if h := installHeading(readme); h != "" {
-		download = append(download, fmt.Sprintf("For how to install it, see [%s](%s#%s) in the README.", h, link, anchor(h)))
+		downloadPart = append(downloadPart, fmt.Sprintf("For how to install it, see [%s](%s#%s) in the README.", h, link, anchor(h)))
 	} else {
-		download = append(download, fmt.Sprintf("For how to install it, see the [README](%s).", link))
+		downloadPart = append(downloadPart, fmt.Sprintf("For how to install it, see the [README](%s).", link))
 	}
-	parts = append(parts, strings.Join(download, "\n\n"))
+	parts = append(parts, strings.Join(downloadPart, "\n\n"))
 
 	changes := []string{"## What's changed"}
 	listed, untyped := 0, false
@@ -425,21 +454,17 @@ func notes(tag, repo, previous string, log []commit, archives []download, messag
 	parts = append(parts, strings.Join(changes, "\n\n"))
 
 	if len(archives) > 0 {
-		var sums, commands []string
-		systems := map[string]bool{}
-		for _, f := range archives {
-			sums = append(sums, f.checksum)
-			systems[f.system] = true
-		}
-		for _, c := range checks {
-			if systems[c.system] {
-				commands = append(commands, "- "+c.command)
+		blocks := []string{"Download the file's `.sha256` too, and run its line in the folder with both. " +
+			"It prints `OK` or `True` if the file is intact."}
+		for _, system := range groups(archives, func(d download) string { return d.system }) {
+			check := checks[system[0].system]
+			var lines []string
+			for _, f := range system {
+				lines = append(lines, strings.ReplaceAll(check.command, "{file}", f.name))
 			}
+			blocks = append(blocks, check.heading+":\n\n```"+check.lang+"\n"+strings.Join(lines, "\n")+"\n```")
 		}
-		parts = append(parts, "<details>\n<summary>🔒 SHA-256</summary>\n\n```\n"+strings.Join(sums, "\n")+"\n```\n\n"+
-			"To check your downloads, put them and their `.sha256` files in a folder of their own, and run the command "+
-			"for your system there. Delete older copies first, so your browser doesn't rename the new ones.\n\n"+
-			strings.Join(commands, "\n")+"\n\n</details>")
+		parts = append(parts, "<details>\n<summary>🔒 SHA-256</summary>\n\n"+strings.Join(blocks, "\n\n")+"\n\n</details>")
 	}
 	return strings.Join(parts, "\n\n") + "\n"
 }
