@@ -69,8 +69,11 @@ jobs:
         with:
           cache-name: ${{ matrix.os == 'android' && 'test-android' || 'test' }}
           ndk: ${{ matrix.os == 'android' }}
+      # The fast profile's flags, which `make test` uses too. The Windows
+      # runner has no make.
       - if: matrix.os != 'android'
-        run: go test ./...
+        shell: bash
+        run: go test -gcflags='all=-N -l' ./...
       # The race detector needs cgo, which the Linux runner has set up.
       - if: matrix.os == 'ubuntu-latest'
         run: make race
@@ -102,17 +105,23 @@ jobs:
 
       # The archive names and --version keep the tag's v, such as v1.0.0, and
       # a pre-release or a branch build has the commit too, such as
-      # v1.0.0-rc.1+<commit> or v0.0.0-dev+<commit>.
+      # v1.0.0-rc.1+<commit> or v0.0.0-dev+<commit>. Release candidates and
+      # releases use the release profile, the rest fast.
       - name: Build packages
         id: package
         env:
           VERSION: ${{ inputs.version }}
         run: |
           version=${VERSION:-0.0.0-dev}
+          profile=fast
+          if [[ $version != *-* || $version == *-rc.* ]]; then
+            profile=release
+          fi
           [[ $version != *-* ]] || version+=+$(git rev-parse HEAD | cut -c1-7)
           version=v$version
-          make package VERSION="$version"
+          make package VERSION="$version" PROFILE="$profile"
           echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "profile=$profile" >>"$GITHUB_OUTPUT"
 
       - name: Check the Linux archive
         env:
@@ -127,9 +136,10 @@ jobs:
       - name: Summary
         env:
           VERSION: ${{ steps.package.outputs.version }}
+          PROFILE: ${{ steps.package.outputs.profile }}
         run: |
           {
-            echo "### apple-event-streamer $VERSION"
+            echo "### apple-event-streamer $VERSION ($PROFILE profile)"
             echo
             echo "| Archive | Size | SHA-256 |"
             echo "| --- | --- | --- |"

@@ -19,12 +19,12 @@ make lint      # staticcheck and govulncheck for Linux, Android, Windows and mac
 To build a release with a newer local Go, let Go fetch the pinned version:
 
 ```sh
-GOTOOLCHAIN=go$(cat .go-version) make package
+GOTOOLCHAIN=go$(cat .go-version) make package PROFILE=release
 ```
 
-Binaries are built with `CGO_ENABLED=0 -trimpath -tags nethttpomithttp2
--ldflags "-s -w"`. The tag leaves out HTTP/2, which saves about 400 KB: the
-app only fetches three small files, and mpv does the streaming.
+Binaries are built with `CGO_ENABLED=0 -trimpath -tags nethttpomithttp2`.
+The tag leaves out HTTP/2, which saves about 400 KB: the app only fetches
+three small files, and mpv does the streaming.
 
 Android is the exception, and needs cgo: Go's own DNS resolver doesn't work on
 Android, and `android/amd64` can't link without cgo. The static Linux binaries
@@ -36,6 +36,13 @@ Android builds use the NDK version in `.ndk-version`, from `$ANDROID_NDK` or
 app runs on. The binaries are aligned for 16 KB pages. `make vet` and `make
 lint` only check `android/arm64`, because `android/amd64` won't type-check
 without cgo.
+
+There are two build profiles, chosen with `PROFILE`. `fast`, the default,
+doesn't optimise or inline (`-gcflags='all=-N -l'`) and keeps the symbol
+table and DWARF, for a debugger. `release` strips them (`-ldflags "-s -w"`).
+It also builds Android's C code with
+`-O3 -flto -ffunction-sections -fdata-sections` and links it with
+`--gc-sections`. The tests always use `fast`.
 
 ## Archives
 
@@ -105,9 +112,10 @@ On Android the default player is the mpv app, which works differently:
 - test: the tests on Ubuntu, macOS, Windows and Android, and on Ubuntu also
   under the race detector. Android's run as x86_64 in `termux-docker`, with
   `make test-android`.
-- build: every target's archive, with the pinned Go version. It runs the Linux
-  binary, and keeps the archives for a day as the run's `release` artifact.
-  On a branch the version is `v0.0.0-dev+<commit>`.
+- build: every target's archive, with the pinned Go version. Release
+  candidates and releases use the release profile, and other builds fast. It
+  runs the Linux binary, and keeps the archives for a day as the run's
+  `release` artifact. On a branch the version is `v0.0.0-dev+<commit>`.
 - check: extracts the macOS, Windows and Android archives and runs the binary.
   On macOS it runs both halves of the universal2 binary, x86_64 through Rosetta,
   and fails if the runner has no Rosetta. Android's run in `termux-docker`,

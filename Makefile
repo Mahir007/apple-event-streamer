@@ -1,8 +1,35 @@
 BINARY  := apple-event-streamer
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
-GOBUILD := go build -trimpath -tags nethttpomithttp2 -ldflags '$(LDFLAGS)'
+
+# Build profiles: PROFILE=fast (the default) or PROFILE=release. CI picks
+# one from the version.
+#
+# fast doesn't optimise or inline, and keeps the symbol table and DWARF, for
+# a debugger. Go's build cache makes it incremental. The tests always build
+# with it.
+#
+# release strips the symbol table and DWARF. Go has no optimisation level or
+# LTO to turn up, so the rest is for the C that cgo compiles for Android:
+# -O3, LTO and dead-code removal.
+PROFILE ?= fast
+FAST_GCFLAGS := all=-N -l
+FAST_CFLAGS  := -O0 -g
+ifeq ($(PROFILE),fast)
+PROFILE_GCFLAGS := $(FAST_GCFLAGS)
+PROFILE_CFLAGS  := $(FAST_CFLAGS)
+PROFILE_LDFLAGS :=
+else ifeq ($(PROFILE),release)
+PROFILE_GCFLAGS :=
+PROFILE_CFLAGS  := -O3 -flto -ffunction-sections -fdata-sections
+PROFILE_LDFLAGS := -s -w "-extldflags=-flto -Wl,--gc-sections"
+else
+$(error PROFILE is fast or release, not $(PROFILE))
+endif
+
+GOBUILD := go build -trimpath -tags nethttpomithttp2 -gcflags '$(PROFILE_GCFLAGS)' \
+	-ldflags '$(PROFILE_LDFLAGS) -X main.version=$(VERSION)'
 BUILD   := CGO_ENABLED=0 $(GOBUILD)
+GOTEST  := go test -gcflags '$(FAST_GCFLAGS)'
 # macOS ships as one universal2 (x86_64 + arm64) binary.
 TARGETS := linux/amd64 linux/arm64 android/amd64 android/arm64 windows/amd64 windows/arm64 darwin/universal
 
@@ -16,7 +43,7 @@ ANDROID_BIN := $(ANDROID_NDK)/toolchains/llvm/prebuilt/$(shell uname -s | tr A-Z
 # $(call androidbuild,GOARCH,OUTPUT)
 androidbuild = case $(1) in amd64) cpu=x86_64 ;; arm64) cpu=aarch64 ;; esac; \
 	GOOS=android GOARCH=$(1) CGO_ENABLED=1 CC="$(ANDROID_BIN)/$$cpu-linux-android$(ANDROID_API)-clang" \
-	$(GOBUILD) -o $(2) . && go run ./tools/androidelf $(2)
+	CGO_CFLAGS='$(PROFILE_CFLAGS)' $(GOBUILD) -o $(2) . && go run ./tools/androidelf $(2)
 
 # Windows executables embed a version resource (tools/winres); Task Manager
 # shows its description as the process name. The .syso exists only while
@@ -88,11 +115,11 @@ package: dist
 	cd dist && for a in *.tar.xz *.zip; do sha256sum $$a > $$a.sha256; done
 
 test:
-	go test ./...
+	$(GOTEST) ./...
 
 # The race detector needs cgo.
 race:
-	CGO_ENABLED=1 go test -race ./...
+	CGO_ENABLED=1 CGO_CFLAGS='$(FAST_CFLAGS)' $(GOTEST) -race ./...
 
 # Runs the tests in termux-docker, which has Android's libc and linker: set
 # TERMUX_IMAGE to the x86_64 image. The tools only run on the computer doing the
@@ -101,7 +128,7 @@ test-android:
 	@test -d "$(ANDROID_NDK)" || { echo "Android tests need NDK $$(cat .ndk-version): set ANDROID_NDK to its folder"; exit 1; }
 	@mkdir -p .bin/android-test
 	@GOOS=android GOARCH=amd64 CGO_ENABLED=1 CC="$(ANDROID_BIN)/x86_64-linux-android$(ANDROID_API)-clang" \
-		go test -c -o .bin/android-test/ . ./internal/...
+		CGO_CFLAGS='$(FAST_CFLAGS)' $(GOTEST) -c -o .bin/android-test/ . ./internal/...
 	@docker run --rm -v "$(CURDIR):/mnt/repo:ro" "$(TERMUX_IMAGE)" sh -c ' \
 		fail=0; \
 		cd /mnt/repo; \
