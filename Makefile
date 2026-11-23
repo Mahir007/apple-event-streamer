@@ -91,7 +91,14 @@ dist:
 # in sha256sum format ("<hash>  <archive>").
 # Needs xz, zip and advzip (Debian/Ubuntu: xz-utils zip advancecomp).
 # Archives are compressed in parallel; zopfli is single-threaded and slow.
-TAR := tar --owner=0 --group=0 --numeric-owner --sort=name
+#
+# The same commit gives the same archives: entries are sorted, owned by root
+# and dated to the commit, or to SOURCE_DATE_EPOCH. zip stores local time, so
+# it runs in UTC. xz runs single-threaded: each archive fits in one xz block,
+# so threads don't speed it up, and with -T0 xz can fall back to its
+# single-threaded mode, which writes a different file.
+SOURCE_DATE_EPOCH ?= $(shell git log -1 --format=%ct 2>/dev/null || date +%s)
+TAR := tar --format=gnu --owner=0 --group=0 --numeric-owner --sort=name
 
 package: dist
 	@stage=$$(mktemp -d) && trap 'rm -rf "$$stage"' EXIT && \
@@ -103,11 +110,13 @@ package: dist
 		mkdir -m 755 "$$stage/$$name"; \
 		install -m 755 $$f "$$stage/$$name/$(BINARY)$$ext"; \
 		install -m 644 LICENSE "$$stage/THIRD_PARTY_LICENSES" "$$stage/$$name/"; \
+		touch -d @$(SOURCE_DATE_EPOCH) "$$stage/$$name" "$$stage/$$name"/*; \
 		if [ $$os = windows ]; then \
-			(cd "$$stage" && zip -9 -X -q -r $$name.zip $$name && advzip -z -4 -q $$name.zip); \
+			(cd "$$stage" && find $$name | LC_ALL=C sort | TZ=UTC zip -9 -X -q -@ $$name.zip && \
+				advzip -z -4 -q $$name.zip); \
 			mv "$$stage/$$name.zip" dist/; \
 		else \
-			$(TAR) -C "$$stage" -cf - $$name | xz -9e -T0 > dist/$$name.tar.xz; \
+			$(TAR) -C "$$stage" -cf - $$name | xz -9e -T1 > dist/$$name.tar.xz; \
 		fi; \
 		rm $$f; echo "  dist/$$name" ) & pids="$$pids $$!"; \
 	done; \

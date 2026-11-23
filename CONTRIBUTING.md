@@ -48,6 +48,8 @@ It also builds Android's C code with
 
 `.tar.xz` archives use `xz -9e`. Windows `.zip` files are recompressed with
 zopfli (`advzip -z -4`), which makes them about 4% smaller than `zip -9`.
+The same commit gives the same archives. Their entries are sorted, owned by
+root and dated to the commit, or to `SOURCE_DATE_EPOCH` if it's set.
 
 Not UPX-packed: it can't pack Windows arm64 or macOS, isn't smaller than xz,
 and trips antivirus.
